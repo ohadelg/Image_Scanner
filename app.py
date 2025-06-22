@@ -7,12 +7,12 @@ from io import BytesIO
 import zipfile
 import shutil
 import pandas as pd
-from utils.gemini_utils import classify_image_with_gemini, configure_gemini, get_gemini_vision_model
+from utils.gemini_utils import classify_image_with_gemini, configure_model, get_vision_model
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Visual Content Analyzer with Gemini",
-    page_icon="🔍",
+    page_title="Visual Content Analyzer with VLM",
+    page_icon="🌅",
     layout="wide"
 )
 
@@ -44,8 +44,8 @@ def display_results(results_data):
             else:
                 st.caption(f"Could not display: {result['Image Name']}")
         with col2:
-            st.write(f"**Prompt:** {result['Prompt']}")
-            st.write(f"**Gemini's Output:**")
+            # st.write(f"**Prompt:** {result['Prompt']}")
+            st.write(f"**Model's Output:**")
             st.markdown(f"> {result['Classification']}") # Using markdown for blockquote
         if i < len(results_data) - 1: # Don't add separator after the last item
             st.markdown("---")
@@ -73,24 +73,23 @@ def display_results(results_data):
     )
 
 # --- Main Application UI ---
-st.title("🔍 Visual Content Analyzer with Gemini VLM")
+st.title("🔍 Visual Content Analyzer with VLM")
 st.markdown(
     "Upload a **ZIP file** containing your images, provide a classification prompt, "
-    "and let Gemini analyze them!"
+    "and let the model will analyze them!"
 )
 
 # --- API Key Configuration Check ---
 api_key_configured = False
 try:
-    configure_gemini() # Attempt to configure Gemini (loads .env)
-    get_gemini_vision_model() # Check if model can be fetched
+    configure_model() # Attempt to configure Gemini (loads .env)
+    get_vision_model() # Check if model can be fetched
     api_key_configured = True
-    st.sidebar.success("Gemini API Key configured successfully.")
+    st.sidebar.success("VLM API Key configured successfully.")
 except (ValueError, ConnectionError) as e:
     st.error(
         f"**Error configuring Gemini API:** {e}. "
-        "Please ensure your `GEMINI_API_KEY` is correctly set in a `.env` file "
-        "in the project root or as an environment variable."
+        "Please ensure your `VLM_API_KEY` is correctly set in a `.env` file "
     )
     st.markdown(
         "Refer to the `README.md` for instructions on setting up your API key."
@@ -107,9 +106,10 @@ uploaded_zip_file = st.file_uploader(
 )
 
 st.header("2. Enter Your Classification Prompt")
-default_prompt = "Describe the main objects in this image and categorize it (e.g., nature, urban, abstract)."
+default_prompt = "Describe the main objects in this image and categorize it (e.g., nature, urban, abstract).\n"
+default_prompt += "Return just one of the options: dog, cat, cow as output."
 prompt_text = st.text_area(
-    "Enter the prompt for Gemini VLM:",
+    "Enter the prompt for VLM to analyze (Don't forget to delete the default prompt):",
     value=default_prompt,
     height=100,
     help="Examples: 'What objects are in this image?', 'Is this image related to nature or urban environments?', 'Categorize these images as animals, plants, or vehicles.'"
@@ -143,6 +143,7 @@ if classify_button:
                 for file in files:
                     if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                         image_files.append(os.path.join(root, file))
+                        print(f"Found image: {file}")
 
             if not image_files:
                 st.warning("⚠️ No valid image files (png, jpg, jpeg, gif, bmp) found in the uploaded ZIP file.")
@@ -162,7 +163,7 @@ if classify_button:
                         # Store path for display, use BytesIO for PIL and Gemini
                         pil_image_bytes = BytesIO(image_bytes)
 
-                        classification_result = classify_image_with_gemini(pil_image_bytes, prompt_text)
+                        classification_result = classify_image_with_gemini(image_bytes, prompt_text)
 
                         results_data.append({
                             "Image Name": image_name,
@@ -211,19 +212,34 @@ if classify_button:
 
 # --- Sidebar Information ---
 st.sidebar.markdown("---")
-st.sidebar.markdown("### About")
+st.sidebar.markdown("### About") # About section
 st.sidebar.info(
-    "This application uses Google's Gemini Vision Language Model (VLM) "
-    "to classify images based on a user-provided text prompt. "
-    "Built with Streamlit by an AI assistant."
-)
+    "This application uses Vision Language Model (VLM) to classify images based on a user-provided text prompt.  "
+    "All the user should do is to upload a zip files with the relevant images and provide a text prompt."
+) 
+st.sidebar.markdown("### What does it mean?") # About section
+st.sidebar.info(
+    "This app gives you the oporunity to analyze images very fast and search for specific objects in them.\n "
+    "You can upload large number of images and get the results in a few seconds.\n"
+    "You can find outliers in your data and get a quick overview of the images.", 
+) 
 st.sidebar.markdown("### How to Use")
 st.sidebar.markdown(
-    "1.  Ensure your `GEMINI_API_KEY` is in a `.env` file (see `README.md`).\n"
-    "2.  Create a ZIP file containing the images you want to analyze.\n"
-    "3.  Upload the ZIP file using the uploader.\n"
-    "4.  Enter a text prompt describing what you want Gemini to do (e.g., describe, categorize).\n"
-    "5.  Click 'Classify Images'."
+    "1.  Open the app and make sure you have 'VLM API Key' configured. (green up here👆)\n"
+    "2.  Create a ZIP file containing the images you want to analyze. (only images!)\n"
+    "3.  Upload the ZIP file using the uploader. (you can just drag and drop it)\n"
+    "4.  Enter a text prompt describing what you want Gemini to do (e.g., describe, categorize, etc.).\n"
+    "5.  Click 'Classify Images'. (it will take a while, but it will be worth it)"
+    "6.  Download the results as a CSV file. (you can also see the results in the app)"
+)
+st.sidebar.markdown("### Pro Tips 💪🏽")
+st.sidebar.markdown(
+    "1.  Make sure you have a clear prompt. (e.g., describe, categorize, etc.)\n"
+    "2.  Keep it as simple as possible.\n"
+    "3.  Explain yourself to the model, including several examples to help it understand the task.\n"
+    "4.  To get clean results, force the model to return a single answer. (example: 'Return just one of the options: dog, cat, cow as output.')\n"
+    "5.  For best results, ensure your images are well-lit and in focus. Blurry or dark images can hinder the model's ability to accurately interpret the content."
+    "6.  If you're looking for specific details, make sure your prompt highlights them. For instance, instead of just 'describe the car,' try 'describe the make, model, and color of the car.'"
 )
 
 # Clean up temp directory on script rerun if it somehow persists

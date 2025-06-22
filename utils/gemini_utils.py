@@ -12,7 +12,7 @@ load_dotenv()
 
 _GEMINI_API_KEY_CONFIGURED = False
 
-def configure_gemini():
+def configure_model():
     """Configures the Gemini API with the API key from environment variables."""
     global _GEMINI_API_KEY_CONFIGURED
     if _GEMINI_API_KEY_CONFIGURED:
@@ -21,7 +21,7 @@ def configure_gemini():
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "YOUR_GEMINI_API_KEY_HERE":
         raise ValueError(
-            "GEMINI_API_KEY not found or not set in environment variables. "
+            "API_KEY not found or not set in environment variables. "
             "Please set it in a .env file or as an environment variable. "
             "Make sure it's not the placeholder value."
         )
@@ -32,24 +32,11 @@ def configure_gemini():
         raise ConnectionError(f"Failed to configure Gemini API: {e}")
 
 
-def get_gemini_vision_model():
+def get_vision_model():
     """
-    Ensures Gemini is configured and returns the Gemini Pro Vision model.
-    Raises:
-        ConnectionError: If Gemini API is not configured or model cannot be fetched.
+    Returns the Gemini 2.5 Flash Lite Preview model.
     """
-    if not _GEMINI_API_KEY_CONFIGURED:
-        try:
-            configure_gemini()
-        except ValueError as e: # Catch API key not set error
-             raise ConnectionError(f"Gemini API key not configured: {e}")
-
-
-    try:
-        model = genai.GenerativeModel('gemini-pro-vision')
-        return model
-    except Exception as e:
-        raise ConnectionError(f"Could not get Gemini model. Ensure API key is valid and you have access: {e}")
+    return genai.GenerativeModel('gemini-2.5-flash-lite-preview-06-17')
 
 
 def classify_image_with_gemini(image_bytes, prompt_text):
@@ -68,7 +55,7 @@ def classify_image_with_gemini(image_bytes, prompt_text):
         ValueError: If image_bytes is not valid image data.
         Exception: For other errors during API call.
     """
-    model = get_gemini_vision_model() # This will also ensure configuration
+    model = get_vision_model() # This will also ensure configuration
 
     try:
         # PIL.Image.open can handle BytesIO directly
