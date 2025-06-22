@@ -1,8 +1,8 @@
-# Visual Content Analyzer with Gemini
+# Visual Content Analyzer with VLM
 
 ## Overview
 
-This project is a Streamlit web application that leverages Google's Gemini Vision Language Model (VLM) for image classification and analysis. Users can upload a folder of images (as a ZIP file) and provide a text prompt (e.g., "What are the objects in this image?", "Categorize these images."). The application then sends each image and the prompt to the Gemini API, displaying the VLM's analysis in an interactive GUI.
+This project is a Streamlit web application that leverages Vision Language Model (VLM) for image classification and analysis. Users can upload a folder of images (as a ZIP file) and provide a text prompt (e.g., "What are the objects in this image?", "Categorize these images."). The application then sends each image and the prompt to the API, displaying the VLM's analysis in an interactive GUI.
 
 ## Core Functionality
 
@@ -16,21 +16,20 @@ This project is a Streamlit web application that leverages Google's Gemini Visio
 ## Folder Hierarchy
 
 ```
-visual_content_analyzer/
-├── .streamlit/
-│   └── config.toml           # Streamlit configuration (e.g., theme)
-├── app.py                    # Main Streamlit application file
-├── requirements.txt          # Python dependencies
-├── .env                      # For storing the Gemini API key (IMPORTANT: Keep this file private)
-├── utils/
-│   ├── __init__.py
-│   ├── gemini_utils.py       # Functions for interacting with Gemini API
-│   └── image_processing.py   # Placeholder for image handling functions
-├── data/
-│   └── sample_images/        # Placeholder for sample images
-│       ├── image1.jpg        # Example (add your own or use provided)
-│       └── image2.png        # Example (add your own or use provided)
-└── README.md                 # This file
+|.streamlit/
+|  └── config.toml           # Streamlit configuration (e.g., theme)
+| app.py                    # Main Streamlit application file
+| requirements.txt          # Python dependencies
+| .env                      # For storing the Gemini API key (IMPORTANT: Keep this file private)
+| utils/
+│  ├── __init__.py
+│  ├── gemini_utils.py       # Functions for interacting with Gemini API
+│  └── image_processing.py   # Placeholder for image handling functions
+|data/
+|  └── sample_images/        # Placeholder for sample images
+|      ├── image1.jpg        # Example (add your own or use provided)
+|      └── image2.png        # Example (add your own or use provided)
+|README.md                 # This file
 ```
 
 ## Setup and Installation
@@ -65,20 +64,19 @@ Follow these steps to set up and run the project locally:
     ```
 
 4.  **Obtain and Configure Gemini API Key:**
-    *   Go to [Google AI Studio](https://aistudio.google.com/app/apikey) (you'll need a Google account).
     *   Create a new API key. **Keep this key secure and private.**
     *   In the root of your project (`visual_content_analyzer/`), create a file named `.env`.
     *   Add your API key to the `.env` file like this:
         ```env
-        GEMINI_API_KEY="YOUR_ACTUAL_GEMINI_API_KEY_HERE"
+        API_KEY="YOUR_ACTUAL_API_KEY_HERE"
         ```
-        Replace `"YOUR_ACTUAL_GEMINI_API_KEY_HERE"` with the key you obtained.
+        Replace `"YOUR_ACTUAL_API_KEY_HERE"` with the key you obtained.
         **Do not commit the `.env` file with your actual key to public repositories.** A `.gitignore` file should ideally list `.env`.
 
 ## How to Run the Application
 
 1.  **Ensure your virtual environment is activated** (see Step 2 in Setup).
-2.  **Make sure your `GEMINI_API_KEY` is correctly set** in the `.env` file (see Step 4 in Setup).
+2.  **Make sure your `API_KEY` is correctly set** in the `.env` file (see Step 4 in Setup).
 3.  **Navigate to the project root directory** (`visual_content_analyzer/`) in your terminal.
 4.  **Run the Streamlit app:**
     ```bash
