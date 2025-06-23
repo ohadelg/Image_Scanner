@@ -23,8 +23,8 @@ LOCALIZATION = {
         "he": "🔍 מנתח תוכן חזותי עם VLM"
     },
     "app_description": {
-        "en": "Upload a **ZIP file** containing your images, provide a classification prompt, and let the model will analyze them!",
-        "he": "העלה **קובץ ZIP** המכיל את התמונות שלך, ספק הנחיה לסיווג, ותן למודל לנתח אותן!"
+        "en": "Upload a ZIP file containing your images, provide a classification prompt, and let the model will analyze them!",
+        "he": "העלה קובץ ZIP המכיל את התמונות שלך, ספק הנחיה לסיווג, ותן למודל לנתח אותן!"
     },
     "api_key_configured_success": {
         "en": "VLM API Key configured successfully.",
@@ -44,7 +44,7 @@ LOCALIZATION = {
     },
     "zip_uploader_label": {
         "en": "Select a .zip file containing your images.",
-        "he": "בחר קובץ zip. המכיל את התמונות שלך."
+        "he": "גרור לכאן את התיקיה הרלוונטית"
     },
     "zip_uploader_help": {
         "en": "Ensure the ZIP file contains image files (e.g., .png, .jpg, .jpeg).",
@@ -64,7 +64,7 @@ LOCALIZATION = {
     },
     "prompt_text_area_label": {
         "en": "Enter the prompt for VLM to analyze (Don't forget to delete the default prompt):",
-        "he": "הזן את ההנחיה ל-VLM לניתוח (אל תשכח למחוק את הנחיית ברירת המחדל):"
+        "he": "תזין הנחיה למודל לניתוח התמונה (אל תשכח למחוק את ברירת המחדל)"
     },
     "prompt_text_area_help": {
         "en": "Examples: 'What objects are in this image?', 'Is this image related to nature or urban environments?', 'Categorize these images as animals, plants, or vehicles.'",
@@ -139,8 +139,8 @@ LOCALIZATION = {
         "he": "לא ניתן היה להציג: {image_name}" # Placeholder
     },
     "results_model_output_label": {
-        "en": "**Model's Output:**",
-        "he": "**פלט המודל:**"
+        "en": "Model's Output:",
+        "he": "פלט המודל:"
     },
     "results_success_classification_complete": {
         "en": "Classification complete!",
@@ -171,8 +171,8 @@ LOCALIZATION = {
         "he": "אפליקציה זו נותנת לך את ההזדמנות לנתח תמונות במהירות רבה ולחפש בהן אובייקטים ספציפיים.\n באפשרותך להעלות מספר רב של תמונות ולקבל את התוצאות תוך מספר שניות.\n באפשרותך למצוא חריגים בנתונים שלך ולקבל סקירה מהירה של התמונות."
     },
     "sidebar_how_to_use_header": {
-        "en": "### How to Use",
-        "he": "### איך להשתמש"
+        "en": "How to Use",
+        "he": "איך להשתמש"
     },
     "sidebar_how_to_use_steps": { # This will be a list of strings for easier processing
         "en": [
@@ -193,8 +193,8 @@ LOCALIZATION = {
         ]
     },
     "sidebar_pro_tips_header": {
-        "en": "### Pro Tips 💪🏽",
-        "he": "### טיפים למקצוענים 💪🏽"
+        "en": "Pro Tips 💪🏽",
+        "he": "טיפים למקצוענים 💪🏽"
     },
     "sidebar_pro_tips_list": { # This will be a list of strings
         "en": [
@@ -228,11 +228,9 @@ if 'language' not in st.session_state:
 # --- Language Switcher Callbacks ---
 def set_language_en():
     st.session_state.language = 'en'
-    st.rerun()
 
 def set_language_he():
     st.session_state.language = 'he'
-    st.rerun()
 
 # --- Language Switcher UI ---
 # Must be placed early, before elements that use localized text
@@ -595,7 +593,11 @@ st.sidebar.info(localized_text("sidebar_about_info", "raw_text"))
 localized_text("sidebar_what_does_it_mean_header", element_type="sidebar_label", target=st.sidebar)
 st.sidebar.info(localized_text("sidebar_what_does_it_mean_info", "raw_text"))
 
-localized_text("sidebar_how_to_use_header", element_type="sidebar_label", target=st.sidebar)
+lang = st.session_state.language
+align = "left" if lang == "en" else "right"
+direction = "ltr" if lang == "en" else "rtl"
+sidebar_how_to_use_header = localized_text("sidebar_how_to_use_header", element_type="sidebar_label", target=st.sidebar)
+st.sidebar.markdown(f"<div style='text-align: {align}; direction: {direction};'><h3>{sidebar_how_to_use_header}</h3></div>", unsafe_allow_html=True)
 how_to_use_steps = localized_text("sidebar_how_to_use_steps", "raw_text") # Returns a list
 for step in how_to_use_steps:
     # Each step is markdown, apply alignment
@@ -605,7 +607,8 @@ for step in how_to_use_steps:
     st.sidebar.markdown(f"<div style='text-align: {align}; direction: {direction};'>{step}</div>", unsafe_allow_html=True)
 
 
-localized_text("sidebar_pro_tips_header", element_type="sidebar_label", target=st.sidebar)
+sidebar_pro_tips_header = localized_text("sidebar_pro_tips_header", element_type="sidebar_label", target=st.sidebar)
+st.sidebar.markdown(f"<div style='text-align: {align}; direction: {direction};'><h3>{sidebar_pro_tips_header}</h3></div>", unsafe_allow_html=True)
 pro_tips_list = localized_text("sidebar_pro_tips_list", "raw_text") # Returns a list
 for tip in pro_tips_list:
     # Each tip is markdown, apply alignment

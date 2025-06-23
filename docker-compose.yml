@@ -1,6 +1,7 @@
 version: '3.8'
 services:
   app:
+    container_name: visual-content-analyzer
     build: .
     env_file:
       - .env
