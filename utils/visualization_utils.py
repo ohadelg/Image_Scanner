@@ -200,7 +200,7 @@ def pil_to_base64(pil_image: Image.Image, format="PNG") -> str:
     return img_str
 
 
-def generate_point_html(pil_image: Image.Image, points_data: list, image_id: str = "imageToAnnotate") -> str:
+def generate_point_html(pil_image: Image.Image, points_data: list, image_id: str = "imageToAnnotate", mirror_x: bool = False) -> str:
     """
     Generates an HTML string to display an image with points overlaid.
 
@@ -209,6 +209,7 @@ def generate_point_html(pil_image: Image.Image, points_data: list, image_id: str
         points_data: A list of dictionaries, where each dict has "point": [y, x] (normalized 0-1000)
                      and "label": "description".
         image_id: A unique ID for the image element in HTML, if multiple images are on a page.
+        mirror_x: If True, mirrors the x-coordinate (useful if coordinates are in different coordinate system).
 
     Returns:
         An HTML string for rendering.
@@ -220,36 +221,79 @@ def generate_point_html(pil_image: Image.Image, points_data: list, image_id: str
         # print(f"Warning: points_data is not a list: {points_data}")
         points_data = [] # Default to empty if format is incorrect
 
+    # Debug logging
+    print("=" * 80)
+    print("🔍 POINTS VISUALIZATION DEBUG LOG")
+    print("=" * 80)
+    print(f"📁 Image ID: {image_id}")
+    print(f"📐 Image Dimensions: {pil_image.width} x {pil_image.height} pixels")
+    print(f"🔄 Mirror X: {mirror_x}")
+    print(f"📦 Number of points received: {len(points_data)}")
+    print(f"📋 Raw points data: {points_data}")
+    print("-" * 80)
+
     svg_elements = ""
-    for item in points_data:
+    for i, item in enumerate(points_data):
         if isinstance(item, dict) and "point" in item and "label" in item:
             try:
-                y, x = item["point"]
+                y_raw, x_raw = item["point"]
                 label = item["label"]
-                # Convert from normalized 0-1000 coordinates to percentage coordinates.
-                # The 0-1000 range is assumed to map to 0%-100% of the image dimensions.
-                percent_x = (x / 1000.0) * 100
-                percent_y = (y / 1000.0) * 100
                 
-                # Clamping to 0-100% is good practice if source coordinates could be outside 0-1000.
-                # However, if they are strictly within 0-1000, this might not be strictly necessary
-                # but doesn't hurt. The main issue is usually the scaling factor.
-                percent_x = max(0.0, min(100.0, percent_x))
-                percent_y = max(0.0, min(100.0, percent_y))
-                svg_elements += f'<circle cx="{percent_x}%" cy="{percent_y}%" r="5" fill="red" />'
-                svg_elements += f'<text x="{percent_x}%" y="{percent_y}%" dy="-10" fill="white" background="black" font-size="12" text-anchor="middle">{label}</text>'
+                print(f"📍 Point {i+1}: '{label}'")
+                print(f"   📊 Raw coordinates: y={y_raw}, x={x_raw}")
+
+                # Convert from normalized 0-1000 coordinates to absolute pixel coordinates
+                # The 0-1000 range maps to the actual image dimensions
+                if mirror_x:
+                    # Mirror the x-coordinate: x = width - x
+                    svg_x = pil_image.width - ((x_raw / 1000.0) * pil_image.width)
+                    print(f"   🔄 Mirrored x-coordinate: {x_raw} → {svg_x:.1f}px")
+                else:
+                    svg_x = (x_raw / 1000.0) * pil_image.width
+                
+                svg_y = (y_raw / 1000.0) * pil_image.height
+                
+                # Clamp coordinates to image bounds
+                svg_x = max(0.0, min(pil_image.width, svg_x))
+                svg_y = max(0.0, min(pil_image.height, svg_y))
+                
+                print(f"   🎯 SVG coordinates: x={svg_x:.1f}px, y={svg_y:.1f}px")
+                print(f"   ✅ Point {i+1} processed successfully")
+
+                # Make points more visible with bright colors and larger size
+                svg_elements += f'<circle cx="{svg_x}" cy="{svg_y}" r="8" fill="red" stroke="white" stroke-width="2" />'
+                svg_elements += f'<text x="{svg_x}" y="{svg_y}" dy="-12" fill="white" stroke="black" stroke-width="1" font-size="12" font-weight="bold" text-anchor="middle">{label}</text>'
             except (TypeError, ValueError, KeyError) as e:
-                # print(f"Skipping invalid point item: {item}. Error: {e}")
+                print(f"   ❌ Error processing point {i+1}: {e}")
                 continue # Skip malformed items
         else:
-            # print(f"Skipping malformed item in points_data: {item}")
+            print(f"   ❌ Skipping malformed item {i+1}: {item}")
             pass
 
+    print("-" * 80)
+    print(f"🎨 Generated {len(svg_elements.split('<circle')) - 1} SVG circles")
+    print(f"📏 Total SVG elements length: {len(svg_elements)} characters")
+
+    # If no points were generated, add a test point to verify the function works
+    if not svg_elements:
+        print("⚠️  No points generated, adding test point")
+        test_x = pil_image.width * 0.1  # 10% from left
+        test_y = pil_image.height * 0.1  # 10% from top
+        svg_elements = f'<circle cx="{test_x}" cy="{test_y}" r="10" fill="yellow" stroke="blue" stroke-width="3" />'
+        svg_elements += f'<text x="{test_x}" y="{test_y}" dy="-15" fill="black" stroke="white" stroke-width="1" font-size="14" font-weight="bold" text-anchor="middle">TEST POINT</text>'
+
+    print("=" * 80)
+    print("🔍 END POINTS VISUALIZATION DEBUG LOG")
+    print("=" * 80)
+    print(f"📐 Final SVG viewBox: 0 0 {pil_image.width} {pil_image.height}")
+    print(f"🎯 Scaling approach: Normalized 0-1000 → Absolute pixels → SVG viewBox → Responsive scaling")
+    print(f"✅ Each image will have its own coordinate system based on its dimensions")
+    print("=" * 80)
 
     html_content = f"""
     <div style="position: relative; display: inline-block;">
-        <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="Annotated Image" style="max-width: 100%; height: auto;">
-        <svg width="100%" height="100%" style="position: absolute; top: 0; left: 0; pointer-events: none;">
+        <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="Annotated Image" style="max-width: 100%; height: auto; display: block;">
+        <svg viewBox="0 0 {pil_image.width} {pil_image.height}" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 10; width: 100%; height: 100%;">
             {svg_elements}
         </svg>
     </div>
