@@ -24,7 +24,6 @@ google-api-python-client
 google-auth
 google-auth-httplib2
 google-generativeai
-google-genai # Add new SDK
 googleapis-common-protos
 grpcio
 grpcio-status==1.71.0

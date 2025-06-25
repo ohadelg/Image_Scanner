@@ -21,7 +21,8 @@ from utils.visualization_utils import (
 st.set_page_config(
     page_title="Visual Content Analyzer with VLM",
     page_icon="🌅",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # --- Global Variables & Setup ---
@@ -63,6 +64,11 @@ def display_analysis_results(results_data, analysis_type):
                 else:
                     st.caption(f"Cannot display: {result['Image Name']}")
             with col2:
+                st.write(f"**User Prompt:**")
+                st.markdown(f"> {result.get('Prompt', 'N/A')}")
+                if result.get('Full Prompt') and os.environ.get("SHOW_FULL_PROMPT", "False").lower() == "true":
+                    with st.expander("View Full Prompt (User + JSON Format)"):
+                        st.text(result.get('Full Prompt', 'N/A'))
                 st.write(f"**Model's Output (Classification):**")
                 st.markdown(f"> {result.get('Output', 'N/A')}")
 
@@ -70,6 +76,13 @@ def display_analysis_results(results_data, analysis_type):
             model_output_text = result.get('Output', '')
             html_was_generated = bool(result.get("HtmlOutput"))
             json_parse_error_indicated = "(Error parsing JSON)" in model_output_text
+
+            # Show user prompt and full prompt
+            st.write(f"**User Prompt:**")
+            st.markdown(f"> {result.get('Prompt', 'N/A')}")
+            if result.get('Full Prompt') and os.environ.get("SHOW_FULL_PROMPT", "False").lower() == "true":
+                with st.expander("View Full Prompt (User + JSON Format)"):
+                    st.text(result.get('Full Prompt', 'N/A'))
 
             if pil_image and html_was_generated:
                 st.components.v1.html(result["HtmlOutput"], height=pil_image.height + 100 if pil_image.height < 800 else 800, scrolling=True)
@@ -79,8 +92,17 @@ def display_analysis_results(results_data, analysis_type):
 
                 if json_parse_error_indicated and not model_output_text.startswith("Error:"):
                     st.warning("Could not parse the model's output as valid JSON. Displaying raw output.")
+                    with st.expander("🔍 Debug: View Raw Model Output"):
+                        st.text(model_output_text)
                 elif model_output_text.startswith("Error:") or model_output_text.startswith("Content blocked"):
                     st.error(f"Model Error: {model_output_text}")
+                else:
+                    # Show parsed JSON data for debugging
+                    with st.expander("🔍 Debug: View Parsed JSON Data"):
+                        if result.get("ParsedJSON"):
+                            st.json(result.get("ParsedJSON"))
+                        else:
+                            st.text("No parsed JSON data available")
 
                 st.markdown(f"**Model's Raw Output:**")
                 st.text_area("Raw Output", value=model_output_text, height=150, disabled=True, key=f"raw_output_{i}")
@@ -89,6 +111,14 @@ def display_analysis_results(results_data, analysis_type):
             st.info("Segmentation mask display is not yet fully implemented.")
             if pil_image:
                 st.image(pil_image, caption=f"Base image: {result['Image Name']}", width=300)
+            
+            # Show user prompt and full prompt
+            st.write(f"**User Prompt:**")
+            st.markdown(f"> {result.get('Prompt', 'N/A')}")
+            if result.get('Full Prompt') and os.environ.get("SHOW_FULL_PROMPT", "False").lower() == "true":
+                with st.expander("View Full Prompt (User + JSON Format)"):
+                    st.text(result.get('Full Prompt', 'N/A'))
+            
             st.markdown(f"**Model's Raw Output (Segmentation):** \n```\n{result.get('Output', 'N/A')}\n```")
 
         # Display raw output for debugging or if HTML failed
@@ -184,20 +214,40 @@ selected_analysis_type = st.selectbox(
 
 # Dynamic prompt area based on analysis type
 prompt_label = "Enter your instructions for the VLM:"
+
+# Separate user prompts from JSON format specifications
+user_prompts = {
+    "Image Classification": "Describe the main objects in this image and categorize it (e.g., dog, cat, cow).",
+    "Point to Items": "Example: find all the dogs in the image and point to them.",
+    "2D Bounding Boxes": "Example: find all the dogs in the image",
+    "Segmentation Masks": "Segment the main objects in this image and provide their masks and labels.",
+    "3D Bounding Boxes": "Detect the 3D bounding boxes of the main objects in the image."
+}
+
+# JSON format specifications that get automatically added to the prompt
+json_format_specs = {
+    "Image Classification": "Return just one word as output.",
+    "Point to Items": "Point to no more than 10 items in the image. Include their labels. The answer should follow the json format: [{\"point\": [y, x], \"label\": \"description\"}, ...]. Points are normalized to 0-1000. IMPORTANT: The coordinates should be in a flat array [y, x], not as separate objects. Return ONLY valid JSON without any additional text or markdown formatting.",
+    "2D Bounding Boxes": "Detect the relevant objects in this image and provide their 2D bounding boxes and labels. The answer should follow the json format: [{\"box_2d\": [ymin, xmin, ymax, xmax], \"label\": \"description\"}, ...]. Coordinates are normalized to 0-1. IMPORTANT: The coordinates should be in a flat array [ymin, xmin, ymax, xmax], not as separate objects with properties. Return ONLY valid JSON without any additional text or markdown formatting.",
+    "Segmentation Masks": "The answer should follow the json format: [{\"mask\": [coordinates], \"label\": \"description\"}, ...]. (Further details needed on expected JSON format for masks) Return ONLY valid JSON without any additional text or markdown formatting.",
+    "3D Bounding Boxes": "Output a json list where each entry contains the object name in \"label\" and its 3D bounding box in \"box_3d\": [x_center, y_center, z_center, x_size, y_size, z_size, roll, pitch, yaw]. Return ONLY valid JSON without any additional text or markdown formatting."
+}
+
+# Legacy default_prompt_text for backward compatibility (can be removed later)
 default_prompt_text = {
-    "Image Classification": "Describe the main objects in this image and categorize it (e.g., nature, urban, abstract).\nReturn just one of the options: dog, cat, cow as output.",
-    "Point to Items": "Point to no more than 10 items in the image. Include their labels.\nThe answer should follow the json format: [{\"point\": [y, x], \"label\": \"description\"}, ...]. Points are normalized to 0-1000.",
-    "2D Bounding Boxes": "Detect objects in this image and provide their 2D bounding boxes and labels.\nThe answer should follow the json format: [{\"box_2d\": [ymin, xmin, ymax, xmax], \"label\": \"description\"}, ...]. Coordinates are normalized.",
-    "Segmentation Masks": "Segment the main objects in this image and provide their masks and labels. (Further details needed on expected JSON format for masks)",
-    "3D Bounding Boxes": "Detect the 3D bounding boxes of no more than 10 items.\nOutput a json list where each entry contains the object name in \"label\" and its 3D bounding box in \"box_3d\": [x_center, y_center, z_center, x_size, y_size, z_size, roll, pitch, yaw]."
+    "Image Classification": user_prompts["Image Classification"] + "\n" + json_format_specs["Image Classification"],
+    "Point to Items": user_prompts["Point to Items"] + "\n" + json_format_specs["Point to Items"],
+    "2D Bounding Boxes": user_prompts["2D Bounding Boxes"] + "\n" + json_format_specs["2D Bounding Boxes"],
+    "Segmentation Masks": user_prompts["Segmentation Masks"] + "\n" + json_format_specs["Segmentation Masks"],
+    "3D Bounding Boxes": user_prompts["3D Bounding Boxes"] + "\n" + json_format_specs["3D Bounding Boxes"]
 }
 
 prompt_help_text = {
     "Image Classification": "Examples: 'What objects are in this image?', 'Is this image related to nature or urban environments?'",
-    "Point to Items": "Clearly describe what items to point to, or ask for general items. Specify JSON output if needed.",
-    "2D Bounding Boxes": "Specify if you want all objects or specific ones. JSON output for coordinates is recommended.",
-    "Segmentation Masks": "Describe the objects to segment. The exact output format for masks needs to be defined based on model capabilities.",
-    "3D Bounding Boxes": "Specify the objects of interest. The model expects a specific JSON output format for 3D boxes."
+    "Point to Items": "Clearly describe what items to point to, or ask for general items. The JSON format will be automatically added.",
+    "2D Bounding Boxes": "Specify if you want all objects or specific ones. The JSON format will be automatically added.",
+    "Segmentation Masks": "Describe the objects to segment. The JSON format will be automatically added.",
+    "3D Bounding Boxes": "Specify the objects of interest. The JSON format will be automatically added."
 }
 
 if selected_analysis_type == "Image Classification":
@@ -205,10 +255,14 @@ if selected_analysis_type == "Image Classification":
 
 prompt_text = st.text_area(
     label=prompt_label,
-    value=default_prompt_text.get(selected_analysis_type, "Please provide instructions for the selected analysis type."),
+    value=user_prompts.get(selected_analysis_type, "Please provide instructions for the selected analysis type."),
     height=150,
     help=prompt_help_text.get(selected_analysis_type, "Provide clear instructions for the AI model.")
 )
+
+# Show the JSON format that will be automatically added
+if selected_analysis_type in json_format_specs and os.environ.get("SHOW_JSON_FORMAT_SPECS", "False").lower() == "true":
+    st.info(f"📋 **JSON Format will be automatically added:**\n{json_format_specs[selected_analysis_type]}")
 
 # --- Process Images Button ---
 analyze_button = st.button("Analyze Images", type="primary", disabled=not api_key_configured)
@@ -221,6 +275,9 @@ if analyze_button:
         st.error("❌ Please enter a classification prompt.")
     else:
         st.info("🔄 Processing images... This may take a while.")
+
+        # Combine user prompt with JSON format specification
+        full_prompt = prompt_text + "\n" + json_format_specs.get(selected_analysis_type, "")
 
         # Ensure temp_dir is clean before use
         cleanup_temp_dir()
@@ -263,7 +320,8 @@ if analyze_button:
                         html_output_for_display = None
                         current_result_data = {
                             "Image Name": image_name,
-                            "Prompt": prompt_text,
+                            "Prompt": prompt_text,  # Store only the user prompt for display
+                            "Full Prompt": full_prompt,  # Store the full prompt for reference
                             "Image Bytes": pil_image_display_bytes, # For display in Streamlit
                             "AnalysisType": selected_analysis_type,
                             "Output": "Error: Processing failed before model call." # Default
@@ -273,12 +331,11 @@ if analyze_button:
                         model_to_use = DEFAULT_MODEL_ID
 
                         if selected_analysis_type == "Image Classification":
-                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use)
+                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use)
                             current_result_data["Output"] = model_output
 
                         elif selected_analysis_type == "Point to Items":
-                            gen_config = google_genai_types.GenerateContentConfig(temperature=0.5)
-                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use, generation_config_params={'temperature': 0.5})
+                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use, generation_config_params={'temperature': 0.5})
                             current_result_data["Output"] = model_output
                             if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
                                 parsed_json = parse_gemini_json_output(model_output)
@@ -286,26 +343,28 @@ if analyze_button:
                                     pil_img_for_html = Image.open(BytesIO(image_bytes)) # Re-open for HTML gen
                                     html_output_for_display = generate_point_html(pil_img_for_html, parsed_json, image_id=f"img_{i}")
                                 else:
-                                    current_result_data["Output"] += " (Error parsing JSON)"
+                                    current_result_data["Output"] += " (Error parsing JSON - Model output was not valid JSON format)"
+                                    print(f"JSON parsing failed for {image_name}. Raw output: {model_output[:500]}...")
 
                         elif selected_analysis_type == "2D Bounding Boxes":
                             # Assuming similar config, can be adjusted
-                            gen_config = google_genai_types.GenerateContentConfig(temperature=0.2) # Lower temp for structured output
-                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use, generation_config_params={'temperature': 0.2})
+                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use, generation_config_params={'temperature': 0.2})
                             current_result_data["Output"] = model_output
                             if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
                                 parsed_json = parse_gemini_json_output(model_output)
                                 if parsed_json:
+                                    print(f"Debug: Successfully parsed JSON for {image_name}: {parsed_json}")
+                                    current_result_data["ParsedJSON"] = parsed_json  # Store for UI display
                                     pil_img_for_html = Image.open(BytesIO(image_bytes))
                                     html_output_for_display = generate_2d_box_html(pil_img_for_html, parsed_json, image_id=f"img_{i}")
                                 else:
-                                    current_result_data["Output"] += " (Error parsing JSON)"
+                                    current_result_data["Output"] += " (Error parsing JSON - Model output was not valid JSON format)"
+                                    print(f"JSON parsing failed for {image_name}. Raw output: {model_output[:500]}...")
 
                         elif selected_analysis_type == "3D Bounding Boxes":
                             # May benefit from Pro model, but let's test with default first.
                             # model_to_use = PRO_MODEL_ID
-                            gen_config = google_genai_types.GenerateContentConfig(temperature=0.5)
-                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use, generation_config_params={'temperature': 0.5})
+                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use, generation_config_params={'temperature': 0.5})
                             current_result_data["Output"] = model_output
                             if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
                                 # generate_3d_box_html expects the raw JSON string
@@ -315,7 +374,7 @@ if analyze_button:
 
                         elif selected_analysis_type == "Segmentation Masks":
                             # Placeholder - requires specific model/prompt tuning
-                            model_output = f"Segmentation mask analysis for '{image_name}' is not fully implemented. Prompt: {prompt_text}"
+                            model_output = f"Segmentation mask analysis for '{image_name}' is not fully implemented. Prompt: {full_prompt}"
                             st.warning(model_output) # Show once
                             current_result_data["Output"] = model_output
 

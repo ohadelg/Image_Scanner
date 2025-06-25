@@ -1,7 +1,7 @@
 # visual_content_analyzer/utils/gemini_utils.py
 
-from google import genai as google_genai_sdk
-from google.genai import types as google_genai_types
+import google.generativeai as google_genai_sdk
+from google.generativeai import types as google_genai_types
 from PIL import Image
 import os
 from dotenv import load_dotenv
@@ -26,7 +26,8 @@ def get_gemini_client():
             "Make sure it's not the placeholder value."
         )
     try:
-        _GEMINI_CLIENT = google_genai_sdk.Client(api_key=api_key)
+        google_genai_sdk.configure(api_key=api_key)
+        _GEMINI_CLIENT = google_genai_sdk
         return _GEMINI_CLIENT
     except Exception as e:
         raise ConnectionError(f"Failed to initialize Gemini Client: {e}")
@@ -67,44 +68,29 @@ def generate_content_with_gemini(image_bytes, prompt_text, model_id=DEFAULT_MODE
     except Exception as e:
         raise ValueError(f"Invalid image data: {e}")
 
-    contents = [img, prompt_text]
-
-    config = None
+    # Get the model
+    model = client.GenerativeModel(model_id)
+    
+    # Prepare generation config if provided
+    generation_config = None
     if generation_config_params:
-        config = google_genai_types.GenerateContentConfig(**generation_config_params)
+        generation_config = google_genai_types.GenerationConfig(**generation_config_params)
 
     try:
-        # The new SDK uses client.models.generate_content
-        # However, the cookbook for Gemini 2 (which this task is based on) shows client.generate_content
-        # Let's try to use the direct client.generate_content if available, or client.models.generate_content
-        # Looking at google-genai SDK, it should be `client.generate_content`
-        # The model is now specified in each call directly.
-
-        # Correction: The new SDK (google-genai) uses `client.generate_content` directly.
-        # The `model` argument should be the model resource name string e.g. "models/gemini-1.5-pro-latest"
-        # or we can initialize a model object first: `model = client.get_model(f"models/{model_id}")`
-        # and then `model.generate_content(...)`
-
-        # Using the direct model string for simplicity as shown in some new SDK examples.
-        # The SDK will prepend "models/" if not present for convenience for some model names.
-
-        model_to_call = client.get_model(f"models/{model_id}")
-        response = model_to_call.generate_content(contents, generation_config=config)
-
+        # Generate content with the model
+        response = model.generate_content([img, prompt_text], generation_config=generation_config)
+        
         if hasattr(response, 'text'):
             return response.text
         else:
-            if response.prompt_feedback and response.prompt_feedback.block_reason:
+            # Handle different response formats
+            if hasattr(response, 'prompt_feedback') and response.prompt_feedback and response.prompt_feedback.block_reason:
                 return f"Content blocked by API. Reason: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}"
             # Check for candidates and parts if text is not directly available
-            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            if hasattr(response, 'candidates') and response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 return "".join(part.text for part in response.candidates[0].content.parts if hasattr(part, "text"))
             return "Gemini API returned a response without direct text and no explicit error. Check response parts."
 
-    except AttributeError as ae:
-        # This might happen if client.models.generate_content was the right path
-        # For now, sticking to client.get_model().generate_content as it's common in new SDK.
-        return f"SDK usage error: {ae}. This might be due to an unexpected SDK structure."
     except Exception as e:
         # Log the full error for debugging
         # print(f"Full error in generate_content_with_gemini: {type(e).__name__} - {e}")
@@ -120,4 +106,4 @@ def classify_image_with_gemini(image_bytes, prompt_text):
     # Using default model and no specific generation config for classification
     return generate_content_with_gemini(image_bytes, prompt_text, model_id=DEFAULT_MODEL_ID)
 
-[end of utils/gemini_utils.py]
+# [end of utils/gemini_utils.py]

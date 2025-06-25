@@ -4,39 +4,75 @@ import json
 import base64
 from io import BytesIO
 from PIL import Image
+import re
 
 def parse_gemini_json_output(json_output_str: str) -> dict | list | None:
     """
     Parses JSON output from Gemini, which may be wrapped in markdown code blocks.
-    Handles potential errors during parsing.
+    Handles potential errors during parsing with improved robustness.
     """
     if not json_output_str:
         return None
 
     # Remove markdown fencing if present
     cleaned_str = json_output_str.strip()
+    
+    # Handle various markdown code block formats
     if cleaned_str.startswith("```json"):
         cleaned_str = cleaned_str[7:] # Remove ```json
         if cleaned_str.endswith("```"):
             cleaned_str = cleaned_str[:-3] # Remove ```
-    elif cleaned_str.startswith("```"): # Less specific, but might occur
+    elif cleaned_str.startswith("```"):
         cleaned_str = cleaned_str[3:]
         if cleaned_str.endswith("```"):
             cleaned_str = cleaned_str[:-3]
 
     cleaned_str = cleaned_str.strip()
 
+    # Try to parse the cleaned string
     try:
         return json.loads(cleaned_str)
     except json.JSONDecodeError as e:
-        # print(f"JSONDecodeError: {e} in string: '{cleaned_str[:200]}...'") # For debugging
-        # Attempt to fix common issues like trailing commas (though json.loads is strict)
-        # Python's eval is unsafe, so not using it.
-        # For now, just return None or raise a custom error.
-        # Consider more sophisticated cleaning if this becomes a frequent issue.
-        # A common issue is if the model returns multiple JSON objects or text alongside JSON.
-        # This parser expects a single, potentially fenced, JSON object/array.
-        return None # Or raise ValueError(f"Failed to parse JSON: {e}. Content: {cleaned_str[:200]}...")
+        # First attempt: try to find JSON within the text
+        json_patterns = [
+            r'\[.*\]',  # Array pattern
+            r'\{.*\}',  # Object pattern
+        ]
+        
+        for pattern in json_patterns:
+            matches = re.findall(pattern, cleaned_str, re.DOTALL)
+            for match in matches:
+                try:
+                    return json.loads(match)
+                except json.JSONDecodeError:
+                    continue
+        
+        # Second attempt: try to fix common issues
+        # Remove any text before the first [ or {
+        for char in ['[', '{']:
+            if char in cleaned_str:
+                start_idx = cleaned_str.find(char)
+                potential_json = cleaned_str[start_idx:]
+                try:
+                    return json.loads(potential_json)
+                except json.JSONDecodeError:
+                    continue
+        
+        # Third attempt: try to extract JSON from common model response patterns
+        # Sometimes models add explanatory text
+        lines = cleaned_str.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('[') or line.startswith('{'):
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+        
+        # If all attempts fail, return None and log the issue
+        print(f"Failed to parse JSON from model output. Original: {json_output_str[:200]}...")
+        print(f"Cleaned: {cleaned_str[:200]}...")
+        return None
 
 
 def pil_to_base64(pil_image: Image.Image, format="PNG") -> str:
@@ -73,11 +109,19 @@ def generate_point_html(pil_image: Image.Image, points_data: list, image_id: str
             try:
                 y, x = item["point"]
                 label = item["label"]
-                # Normalize from 0-1000 to 0-1 for SVG percentage coordinates
-                svg_x = x / 1000.0 * 100
-                svg_y = y / 1000.0 * 100
-                svg_elements += f'<circle cx="{svg_x}%" cy="{svg_y}%" r="5" fill="red" />'
-                svg_elements += f'<text x="{svg_x}%" y="{svg_y}%" dy="-10" fill="white" background="black" font-size="12" text-anchor="middle">{label}</text>'
+                # Adjust scaling to better fit the image
+                # Scale factor to make points appear larger relative to image
+                scale_factor = 1.05  # Reduced from 1.2 to 1.05 for better fit
+                
+                # Convert from normalized 0-1000 coordinates to percentage coordinates with scaling
+                percent_x = (x / 1000.0) * 100 * scale_factor
+                percent_y = (y / 1000.0) * 100 * scale_factor
+                
+                # Ensure coordinates don't go outside the image bounds
+                percent_x = max(0, min(100, percent_x))
+                percent_y = max(0, min(100, percent_y))
+                svg_elements += f'<circle cx="{percent_x}%" cy="{percent_y}%" r="5" fill="red" />'
+                svg_elements += f'<text x="{percent_x}%" y="{percent_y}%" dy="-10" fill="white" background="black" font-size="12" text-anchor="middle">{label}</text>'
             except (TypeError, ValueError, KeyError) as e:
                 # print(f"Skipping invalid point item: {item}. Error: {e}")
                 continue # Skip malformed items
@@ -235,6 +279,3 @@ def generate_3d_box_html(pil_image: Image.Image, boxes_json_str: str, image_id: 
     <p><small>Note: Full interactive 3D visualization as seen in the cookbook requires a more complex setup (e.g., with three.js) not directly replicable here. Displaying raw data and basic details instead.</small></p>
     """
     return html_content
-
-
-[end of utils/visualization_utils.py]
