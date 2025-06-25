@@ -16,6 +16,14 @@ from utils.visualization_utils import (
     generate_3d_box_html,
     pil_to_base64
 )
+from app_config import (
+    TEMP_DIR,
+    ANALYSIS_TYPES,
+    USER_PROMPTS,
+    JSON_FORMAT_SPECS,
+    PROMPT_HELP_TEXT
+    # DEFAULT_PROMPT_TEXT removed as it's unused
+)
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -25,18 +33,49 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Global Variables & Setup ---
-TEMP_DIR = "temp_uploaded_images"
-
 # --- Helper Functions ---
 def cleanup_temp_dir():
     """Removes the temporary directory if it exists."""
     if os.path.exists(TEMP_DIR):
         try:
             shutil.rmtree(TEMP_DIR)
-            # st.text("Cleaned up temporary files.") # Optional: for debugging
         except Exception as e:
             st.warning(f"Could not clean up temporary directory {TEMP_DIR}: {e}")
+
+def _get_generation_config(analysis_type: str) -> dict | None:
+    """Returns specific generation config for an analysis type, if any."""
+    if analysis_type == "Point to Items":
+        return {'temperature': 0.5}
+    elif analysis_type == "2D Bounding Boxes":
+        return {'temperature': 0.2}
+    elif analysis_type == "3D Bounding Boxes":
+        return {'temperature': 0.5}
+    # Add other specific configs here if needed for other types
+    return None
+
+def _process_single_image(image_bytes: bytes, full_prompt: str, analysis_type: str, model_id: str) -> tuple[str, dict | None, str | None]:
+    """
+    Processes a single image with Gemini.
+    Returns: (model_output, parsed_json_if_applicable, error_message_if_any)
+    """
+    generation_config = _get_generation_config(analysis_type)
+    model_output = generate_content_with_gemini(
+        image_bytes,
+        full_prompt,
+        model_id=model_id,
+        generation_config_params=generation_config
+    )
+
+    if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
+        if analysis_type in ["Point to Items", "2D Bounding Boxes"]: # Types that expect simple JSON list output
+            parsed_json = parse_gemini_json_output(model_output)
+            if not parsed_json:
+                return model_output + " (Error parsing JSON - Model output was not valid JSON format)", None, "JSON parsing failed"
+            return model_output, parsed_json, None
+        # For 3D Bounding Boxes, HTML generation handles parsing. For Classification/Segmentation, no direct JSON parsing needed here.
+        return model_output, None, None # No direct parsing needed at this stage for these types or handled later
+    return model_output, None, model_output # Error or blocked content
+
 
 def display_analysis_results(results_data, analysis_type):
     """Displays analysis results based on the type and provides download option."""
@@ -108,23 +147,45 @@ def display_analysis_results(results_data, analysis_type):
                 st.text_area("Raw Output", value=model_output_text, height=150, disabled=True, key=f"raw_output_{i}")
 
         elif analysis_type == "Segmentation Masks":
-            st.info("Segmentation mask display is not yet fully implemented.")
             if pil_image:
                 st.image(pil_image, caption=f"Base image: {result['Image Name']}", width=300)
-            
-            # Show user prompt and full prompt
+            else:
+                st.caption(f"Cannot display image: {result['Image Name']}")
+
+            # Show user prompt
             st.write(f"**User Prompt:**")
             st.markdown(f"> {result.get('Prompt', 'N/A')}")
+
+            # Show full prompt if enabled
             if result.get('Full Prompt') and os.environ.get("SHOW_FULL_PROMPT", "False").lower() == "true":
                 with st.expander("View Full Prompt (User + JSON Format)"):
                     st.text(result.get('Full Prompt', 'N/A'))
             
-            st.markdown(f"**Model's Raw Output (Segmentation):** \n```\n{result.get('Output', 'N/A')}\n```")
+            model_output_segmentation = result.get('Output', 'N/A')
+            st.markdown(f"**Model's Output (Segmentation Data):**")
+            if model_output_segmentation.startswith("Error:") or model_output_segmentation.startswith("Content blocked") or model_output_segmentation.startswith("Segmentation mask analysis for"):
+                st.warning(model_output_segmentation)
+            else:
+                # Attempt to parse as JSON and pretty-print if successful
+                parsed_json_output = parse_gemini_json_output(model_output_segmentation)
+                if parsed_json_output:
+                    st.json(parsed_json_output)
+                else:
+                    # If not valid JSON, show as plain text in a code block
+                    st.markdown(f"```\n{model_output_segmentation}\n```")
+            st.info("Note: Visual rendering of segmentation masks is not yet implemented. Displaying raw model output.")
 
-        # Display raw output for debugging or if HTML failed
-        if analysis_type not in ["Image Classification"] and not result.get("HtmlOutput"):
-             with st.expander("View Raw Output from Model"):
-                st.json(result.get('Output', '{}'))
+        # Display raw output for debugging or if HTML failed - this section might be redundant for segmentation now
+        # if analysis_type not in ["Image Classification", "Segmentation Masks"] and not result.get("HtmlOutput"):
+        #      with st.expander("View Raw Output from Model"):
+        #         st.json(result.get('Output', '{}'))
+        # Consolidate the raw output display for other types if HTML failed
+        elif analysis_type not in ["Image Classification", "Segmentation Masks"] and not result.get("HtmlOutput"):
+             # This part is for Point to Items, 2D Bounding Boxes, 3D Bounding Boxes if HTML output failed
+             # but was already handled within their specific blocks if json_parse_error_indicated or model_output_text.startswith("Error:")
+             # So, this expander might be showing duplicate info or could be refined.
+             # For now, let's ensure it doesn't show for segmentation.
+            pass # Already handled in the specific blocks for other types
 
 
     st.success(f"{analysis_type} complete!")
@@ -173,10 +234,15 @@ st.markdown(
 )
 
 # --- API Key Configuration Check ---
+# This remains in app.py as it's crucial for app startup and uses st.error/st.stop.
+# The success message for the sidebar can be passed or handled if ui_sidebar needs it.
 api_key_configured = False
 try:
     get_gemini_client() # Attempt to initialize the Gemini client
     api_key_configured = True
+    # The success message st.sidebar.success("Gemini API Client initialized successfully.")
+    # will be part of the main app structure, or ui_sidebar can be made aware of this state.
+    # For now, let's keep it simple: main app handles this sidebar message.
     st.sidebar.success("Gemini API Client initialized successfully.")
 except (ValueError, ConnectionError) as e:
     st.error(
@@ -187,6 +253,11 @@ except (ValueError, ConnectionError) as e:
         "Refer to the `README.md` for instructions on setting up your API key."
     )
     st.stop() # Halt execution if API key is not set
+
+
+# --- Initialize Sidebar ---
+from utils.ui_sidebar import display_sidebar
+display_sidebar() # Call the function to display sidebar contents
 
 # --- User Inputs ---
 st.header("1. Upload Your Image Folder (as a .zip file)")
@@ -199,70 +270,31 @@ uploaded_zip_file = st.file_uploader(
 
 st.header("2. Select Analysis Type and Provide Instructions")
 
-analysis_types = [
-    "Image Classification",
-    "Point to Items",
-    "2D Bounding Boxes",
-    "Segmentation Masks",
-    "3D Bounding Boxes"
-]
+# ANALYSIS_TYPES is now imported from app_config
 selected_analysis_type = st.selectbox(
     "Choose the type of analysis:",
-    options=analysis_types,
+    options=ANALYSIS_TYPES, # Use imported ANALYSIS_TYPES
     index=0
 )
 
 # Dynamic prompt area based on analysis type
 prompt_label = "Enter your instructions for the VLM:"
 
-# Separate user prompts from JSON format specifications
-user_prompts = {
-    "Image Classification": "Describe the main objects in this image and categorize it (e.g., dog, cat, cow).",
-    "Point to Items": "Example: find all the dogs in the image and point to them.",
-    "2D Bounding Boxes": "Example: find all the dogs in the image",
-    "Segmentation Masks": "Segment the main objects in this image and provide their masks and labels.",
-    "3D Bounding Boxes": "Detect the 3D bounding boxes of the main objects in the image."
-}
-
-# JSON format specifications that get automatically added to the prompt
-json_format_specs = {
-    "Image Classification": "Return just one word as output.",
-    "Point to Items": "Point to no more than 10 items in the image. Include their labels. The answer should follow the json format: [{\"point\": [y, x], \"label\": \"description\"}, ...]. Points are normalized to 0-1000. IMPORTANT: The coordinates should be in a flat array [y, x], not as separate objects. Return ONLY valid JSON without any additional text or markdown formatting.",
-    "2D Bounding Boxes": "Detect the relevant objects in this image and provide their 2D bounding boxes and labels. The answer should follow the json format: [{\"box_2d\": [ymin, xmin, ymax, xmax], \"label\": \"description\"}, ...]. Coordinates are normalized to 0-1. IMPORTANT: The coordinates should be in a flat array [ymin, xmin, ymax, xmax], not as separate objects with properties. Return ONLY valid JSON without any additional text or markdown formatting.",
-    "Segmentation Masks": "The answer should follow the json format: [{\"mask\": [coordinates], \"label\": \"description\"}, ...]. (Further details needed on expected JSON format for masks) Return ONLY valid JSON without any additional text or markdown formatting.",
-    "3D Bounding Boxes": "Output a json list where each entry contains the object name in \"label\" and its 3D bounding box in \"box_3d\": [x_center, y_center, z_center, x_size, y_size, z_size, roll, pitch, yaw]. Return ONLY valid JSON without any additional text or markdown formatting."
-}
-
-# Legacy default_prompt_text for backward compatibility (can be removed later)
-default_prompt_text = {
-    "Image Classification": user_prompts["Image Classification"] + "\n" + json_format_specs["Image Classification"],
-    "Point to Items": user_prompts["Point to Items"] + "\n" + json_format_specs["Point to Items"],
-    "2D Bounding Boxes": user_prompts["2D Bounding Boxes"] + "\n" + json_format_specs["2D Bounding Boxes"],
-    "Segmentation Masks": user_prompts["Segmentation Masks"] + "\n" + json_format_specs["Segmentation Masks"],
-    "3D Bounding Boxes": user_prompts["3D Bounding Boxes"] + "\n" + json_format_specs["3D Bounding Boxes"]
-}
-
-prompt_help_text = {
-    "Image Classification": "Examples: 'What objects are in this image?', 'Is this image related to nature or urban environments?'",
-    "Point to Items": "Clearly describe what items to point to, or ask for general items. The JSON format will be automatically added.",
-    "2D Bounding Boxes": "Specify if you want all objects or specific ones. The JSON format will be automatically added.",
-    "Segmentation Masks": "Describe the objects to segment. The JSON format will be automatically added.",
-    "3D Bounding Boxes": "Specify the objects of interest. The JSON format will be automatically added."
-}
+# USER_PROMPTS, JSON_FORMAT_SPECS, DEFAULT_PROMPT_TEXT, PROMPT_HELP_TEXT are now imported from app_config
 
 if selected_analysis_type == "Image Classification":
     prompt_label = "Enter Your Classification Prompt:"
 
 prompt_text = st.text_area(
     label=prompt_label,
-    value=user_prompts.get(selected_analysis_type, "Please provide instructions for the selected analysis type."),
+    value=USER_PROMPTS.get(selected_analysis_type, "Please provide instructions for the selected analysis type."), # Use imported USER_PROMPTS
     height=150,
-    help=prompt_help_text.get(selected_analysis_type, "Provide clear instructions for the AI model.")
+    help=PROMPT_HELP_TEXT.get(selected_analysis_type, "Provide clear instructions for the AI model.") # Use imported PROMPT_HELP_TEXT
 )
 
 # Show the JSON format that will be automatically added
-if selected_analysis_type in json_format_specs and os.environ.get("SHOW_JSON_FORMAT_SPECS", "False").lower() == "true":
-    st.info(f"📋 **JSON Format will be automatically added:**\n{json_format_specs[selected_analysis_type]}")
+if selected_analysis_type in JSON_FORMAT_SPECS and os.environ.get("SHOW_JSON_FORMAT_SPECS", "False").lower() == "true":
+    st.info(f"📋 **JSON Format will be automatically added:**\n{JSON_FORMAT_SPECS[selected_analysis_type]}") # Use imported JSON_FORMAT_SPECS
 
 # --- Process Images Button ---
 analyze_button = st.button("Analyze Images", type="primary", disabled=not api_key_configured)
@@ -276,10 +308,10 @@ if analyze_button:
     else:
         st.info("🔄 Processing images... This may take a while.")
 
-        # Combine user prompt with JSON format specification
-        full_prompt = prompt_text + "\n" + json_format_specs.get(selected_analysis_type, "")
+        # Combine user prompt with JSON format specification (use imported JSON_FORMAT_SPECS)
+        full_prompt = prompt_text + "\n" + JSON_FORMAT_SPECS.get(selected_analysis_type, "")
 
-        # Ensure temp_dir is clean before use
+        # Ensure temp_dir is clean before use (TEMP_DIR is imported)
         cleanup_temp_dir()
         os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -312,74 +344,48 @@ if analyze_button:
                         with open(image_path, "rb") as f:
                             image_bytes = f.read() # Read as bytes
 
-                        # Store path for display, use BytesIO for PIL and Gemini
-                        # Create a new BytesIO object for each iteration if it's consumed or closed
-                        pil_image_display_bytes = BytesIO(image_bytes)
+                        pil_image_display_bytes = BytesIO(image_bytes) # For storing/displaying in Streamlit
 
-                        model_output = None
-                        html_output_for_display = None
                         current_result_data = {
                             "Image Name": image_name,
-                            "Prompt": prompt_text,  # Store only the user prompt for display
-                            "Full Prompt": full_prompt,  # Store the full prompt for reference
-                            "Image Bytes": pil_image_display_bytes, # For display in Streamlit
+                            "Prompt": prompt_text,
+                            "Full Prompt": full_prompt,
+                            "Image Bytes": pil_image_display_bytes,
                             "AnalysisType": selected_analysis_type,
-                            "Output": "Error: Processing failed before model call." # Default
+                            "Output": "Error: Processing failed before model call.", # Default
+                            "HtmlOutput": None,
+                            "ParsedJSON": None
                         }
 
-                        gen_config = None
-                        model_to_use = DEFAULT_MODEL_ID
+                        model_to_use = DEFAULT_MODEL_ID # Could be made configurable per analysis type
 
-                        if selected_analysis_type == "Image Classification":
-                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use)
-                            current_result_data["Output"] = model_output
+                        # Core processing call
+                        model_output_raw, parsed_json_data, error_msg = _process_single_image(
+                            image_bytes, full_prompt, selected_analysis_type, model_to_use
+                        )
+                        current_result_data["Output"] = model_output_raw
+                        if parsed_json_data:
+                            current_result_data["ParsedJSON"] = parsed_json_data
 
-                        elif selected_analysis_type == "Point to Items":
-                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use, generation_config_params={'temperature': 0.5})
-                            current_result_data["Output"] = model_output
-                            if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
-                                parsed_json = parse_gemini_json_output(model_output)
-                                if parsed_json:
-                                    pil_img_for_html = Image.open(BytesIO(image_bytes)) # Re-open for HTML gen
-                                    html_output_for_display = generate_point_html(pil_img_for_html, parsed_json, image_id=f"img_{i}")
-                                else:
-                                    current_result_data["Output"] += " (Error parsing JSON - Model output was not valid JSON format)"
-                                    print(f"JSON parsing failed for {image_name}. Raw output: {model_output[:500]}...")
+                        # HTML generation based on analysis type and successful processing
+                        if not error_msg: # No error from _process_single_image (includes JSON parsing for relevant types)
+                            pil_img_for_html = Image.open(BytesIO(image_bytes)) # Re-open for HTML generation
+                            if selected_analysis_type == "Point to Items" and parsed_json_data:
+                                current_result_data["HtmlOutput"] = generate_point_html(pil_img_for_html, parsed_json_data, image_id=f"img_{i}")
+                            elif selected_analysis_type == "2D Bounding Boxes" and parsed_json_data:
+                                current_result_data["HtmlOutput"] = generate_2d_box_html(pil_img_for_html, parsed_json_data, image_id=f"img_{i}")
+                            elif selected_analysis_type == "3D Bounding Boxes": # generate_3d_box_html takes raw model output
+                                current_result_data["HtmlOutput"] = generate_3d_box_html(pil_img_for_html, model_output_raw, image_id=f"img_{i}")
+                            # Image Classification and Segmentation Masks do not generate HTML overlays here by default
 
-                        elif selected_analysis_type == "2D Bounding Boxes":
-                            # Assuming similar config, can be adjusted
-                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use, generation_config_params={'temperature': 0.2})
-                            current_result_data["Output"] = model_output
-                            if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
-                                parsed_json = parse_gemini_json_output(model_output)
-                                if parsed_json:
-                                    print(f"Debug: Successfully parsed JSON for {image_name}: {parsed_json}")
-                                    current_result_data["ParsedJSON"] = parsed_json  # Store for UI display
-                                    pil_img_for_html = Image.open(BytesIO(image_bytes))
-                                    html_output_for_display = generate_2d_box_html(pil_img_for_html, parsed_json, image_id=f"img_{i}")
-                                else:
-                                    current_result_data["Output"] += " (Error parsing JSON - Model output was not valid JSON format)"
-                                    print(f"JSON parsing failed for {image_name}. Raw output: {model_output[:500]}...")
+                        elif selected_analysis_type == "Segmentation Masks" and not model_output_raw.startswith("Error:"):
+                            # Special handling for segmentation if we want to update its status
+                            # For now, _process_single_image already sets current_result_data["Output"]
+                            # If it's the placeholder, it's fine. If it's actual model output, also fine.
+                            # The placeholder `f"Segmentation mask analysis for '{image_name}'..."` is now part of the json_spec.
+                            # Actual model call will occur.
+                            pass
 
-                        elif selected_analysis_type == "3D Bounding Boxes":
-                            # May benefit from Pro model, but let's test with default first.
-                            # model_to_use = PRO_MODEL_ID
-                            model_output = generate_content_with_gemini(image_bytes, full_prompt, model_id=model_to_use, generation_config_params={'temperature': 0.5})
-                            current_result_data["Output"] = model_output
-                            if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
-                                # generate_3d_box_html expects the raw JSON string
-                                pil_img_for_html = Image.open(BytesIO(image_bytes))
-                                html_output_for_display = generate_3d_box_html(pil_img_for_html, model_output, image_id=f"img_{i}")
-                                # No separate JSON parsing check here as generate_3d_box_html does it
-
-                        elif selected_analysis_type == "Segmentation Masks":
-                            # Placeholder - requires specific model/prompt tuning
-                            model_output = f"Segmentation mask analysis for '{image_name}' is not fully implemented. Prompt: {full_prompt}"
-                            st.warning(model_output) # Show once
-                            current_result_data["Output"] = model_output
-
-                        if html_output_for_display:
-                            current_result_data["HtmlOutput"] = html_output_for_display
 
                         results_data.append(current_result_data)
                         image_files_processed_paths.append(image_path)
@@ -420,37 +426,7 @@ if analyze_button:
         finally:
             cleanup_temp_dir()
 
-# --- Sidebar Information ---
-st.sidebar.markdown("---")
-st.sidebar.markdown("### About") # About section
-st.sidebar.info(
-    "This application uses Vision Language Model (VLM) to classify images based on a user-provided text prompt.  "
-    "All the user should do is to upload a zip files with the relevant images and provide a text prompt."
-) 
-st.sidebar.markdown("### What does it mean?") # About section
-st.sidebar.info(
-    "This app gives you the oporunity to analyze images very fast and search for specific objects in them.\n "
-    "You can upload large number of images and get the results in a few seconds.\n"
-    "You can find outliers in your data and get a quick overview of the images.", 
-) 
-st.sidebar.markdown("### How to Use")
-st.sidebar.markdown(
-    "1.  Open the app and make sure you have 'VLM API Key' configured. (green up here👆)\n"
-    "2.  Create a ZIP file containing the images you want to analyze. (only images!)\n"
-    "3.  Upload the ZIP file using the uploader. (you can just drag and drop it)\n"
-    "4.  Enter a text prompt describing what you want Gemini to do (e.g., describe, categorize, etc.).\n"
-    "5.  Click 'Classify Images'. (it will take a while, but it will be worth it)"
-    "6.  Download the results as a CSV file. (you can also see the results in the app)"
-)
-st.sidebar.markdown("### Pro Tips 💪🏽")
-st.sidebar.markdown(
-    "1.  Make sure you have a clear prompt. (e.g., describe, categorize, etc.)\n"
-    "2.  Keep it as simple as possible.\n"
-    "3.  Explain yourself to the model, including several examples to help it understand the task.\n"
-    "4.  To get clean results, force the model to return a single answer. (example: 'Return just one of the options: dog, cat, cow as output.')\n"
-    "5.  For best results, ensure your images are well-lit and in focus. Blurry or dark images can hinder the model's ability to accurately interpret the content."
-    "6.  If you're looking for specific details, make sure your prompt highlights them. For instance, instead of just 'describe the car,' try 'describe the make, model, and color of the car.'"
-)
+# --- Sidebar Information --- is now handled by display_sidebar() from utils.ui_sidebar ---
 
 # Clean up temp directory on script rerun if it somehow persists
 # This is a fallback, primary cleanup is in the processing block

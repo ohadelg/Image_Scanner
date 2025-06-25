@@ -66,17 +66,21 @@ Follow these steps to set up and run the project locally:
 4.  **Obtain and Configure Gemini API Key:**
     *   Create a new API key. **Keep this key secure and private.**
     *   In the root of your project (`visual_content_analyzer/`), create a file named `.env`.
-    *   Add your API key to the `.env` file like this:
+    *   Add your API key to the `.env` file like this (you can use `.env.example` as a template):
         ```env
-        API_KEY="YOUR_ACTUAL_API_KEY_HERE"
+        GEMINI_API_KEY="YOUR_ACTUAL_GEMINI_API_KEY_HERE"
+        # Optional:
+        # SHOW_JSON_FORMAT_SPECS="True"
+        # SHOW_FULL_PROMPT="False"
         ```
-        Replace `"YOUR_ACTUAL_API_KEY_HERE"` with the key you obtained.
+        Replace `"YOUR_ACTUAL_GEMINI_API_KEY_HERE"` with the key you obtained.
         **Do not commit the `.env` file with your actual key to public repositories.** A `.gitignore` file should ideally list `.env`.
+    *   The `.env.example` file provides a template for these settings.
 
 ## How to Run the Application
 
 1.  **Ensure your virtual environment is activated** (see Step 2 in Setup).
-2.  **Make sure your `API_KEY` is correctly set** in the `.env` file (see Step 4 in Setup).
+2.  **Make sure your `GEMINI_API_KEY` is correctly set** in your `.env` file (see Step 4 in Setup).
 3.  **Navigate to the project root directory** (`visual_content_analyzer/`) in your terminal.
 4.  **Run the Streamlit app:**
     ```bash

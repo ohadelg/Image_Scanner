@@ -109,17 +109,16 @@ def generate_point_html(pil_image: Image.Image, points_data: list, image_id: str
             try:
                 y, x = item["point"]
                 label = item["label"]
-                # Adjust scaling to better fit the image
-                # Scale factor to make points appear larger relative to image
-                scale_factor = 1.05  # Reduced from 1.2 to 1.05 for better fit
+                # Convert from normalized 0-1000 coordinates to percentage coordinates.
+                # The 0-1000 range is assumed to map to 0%-100% of the image dimensions.
+                percent_x = (x / 1000.0) * 100
+                percent_y = (y / 1000.0) * 100
                 
-                # Convert from normalized 0-1000 coordinates to percentage coordinates with scaling
-                percent_x = (x / 1000.0) * 100 * scale_factor
-                percent_y = (y / 1000.0) * 100 * scale_factor
-                
-                # Ensure coordinates don't go outside the image bounds
-                percent_x = max(0, min(100, percent_x))
-                percent_y = max(0, min(100, percent_y))
+                # Clamping to 0-100% is good practice if source coordinates could be outside 0-1000.
+                # However, if they are strictly within 0-1000, this might not be strictly necessary
+                # but doesn't hurt. The main issue is usually the scaling factor.
+                percent_x = max(0.0, min(100.0, percent_x))
+                percent_y = max(0.0, min(100.0, percent_y))
                 svg_elements += f'<circle cx="{percent_x}%" cy="{percent_y}%" r="5" fill="red" />'
                 svg_elements += f'<text x="{percent_x}%" y="{percent_y}%" dy="-10" fill="white" background="black" font-size="12" text-anchor="middle">{label}</text>'
             except (TypeError, ValueError, KeyError) as e:
@@ -161,14 +160,28 @@ def generate_2d_box_html(pil_image: Image.Image, boxes_data: list, image_id: str
     for item in boxes_data:
         if isinstance(item, dict) and "box_2d" in item and "label" in item:
             try:
-                ymin, xmin, ymax, xmax = item["box_2d"]
+                ymin_raw, xmin_raw, ymax_raw, xmax_raw = item["box_2d"]
                 label = item["label"]
+
+                # Clamp normalized coordinates to the [0, 1] range
+                ymin = max(0.0, min(1.0, ymin_raw))
+                xmin = max(0.0, min(1.0, xmin_raw))
+                ymax = max(0.0, min(1.0, ymax_raw))
+                xmax = max(0.0, min(1.0, xmax_raw))
+
+                # Ensure ymax >= ymin and xmax >= xmin after clamping
+                if ymax < ymin: ymax = ymin
+                if xmax < xmin: xmax = xmin
 
                 # Convert normalized (0-1) coordinates to SVG percentage
                 svg_x = xmin * 100
                 svg_y = ymin * 100
                 svg_width = (xmax - xmin) * 100
                 svg_height = (ymax - ymin) * 100
+
+                # Ensure width and height are non-negative
+                svg_width = max(0.0, svg_width)
+                svg_height = max(0.0, svg_height)
 
                 svg_elements += f'<rect x="{svg_x}%" y="{svg_y}%" width="{svg_width}%" height="{svg_height}%" style="fill:blue;stroke:blue;stroke-width:1;fill-opacity:0.1;stroke-opacity:0.9" />'
                 svg_elements += f'<text x="{svg_x}%" y="{svg_y}%" dy="-5" fill="white" background="blue" font-size="12">{label}</text>'
@@ -240,42 +253,87 @@ def generate_3d_box_html(pil_image: Image.Image, boxes_json_str: str, image_id: 
     # Trying to replicate a simplified version.
 
     # For simplicity in Streamlit, we'll use the 2D box representation for 3D boxes for now,
-    # and just list the 3D properties. A full 3D interactive view is out of scope for simple HTML generation.
     # The `boxes_json_str` should be parsed first.
+    parsed_boxes_data = parse_gemini_json_output(boxes_json_str)
+    if not isinstance(parsed_boxes_data, list):
+        parsed_boxes_data = []
 
-    parsed_boxes = parse_gemini_json_output(boxes_json_str)
-    if not isinstance(parsed_boxes, list):
-        parsed_boxes = []
+    svg_elements = ""
+    box_details_list = []
 
-    # Create a simple textual representation of 3D boxes for now.
-    # A visual representation would require projecting 3D coordinates to 2D,
-    # which involves camera parameters, etc. This is non-trivial.
+    for item in parsed_boxes_data:
+        if isinstance(item, dict) and "box_3d" in item and "label" in item:
+            try:
+                # box_3d: [x_center, y_center, z_center, x_size, y_size, z_size, roll, pitch, yaw]
+                params = item["box_3d"]
+                label = item["label"]
 
-    box_details_html = "<ul>"
-    for box_data in parsed_boxes:
-        if isinstance(box_data, dict) and "label" in box_data and "box_3d" in box_data:
-            label = box_data.get("label", "N/A")
-            box_3d_params = box_data.get("box_3d", [])
-            box_details_html += f"<li><b>{label}</b>: {box_3d_params}</li>"
-    box_details_html += "</ul>"
+                if len(params) == 9:
+                    x_center, y_center, z_center, x_size, y_size, z_size, roll, pitch, yaw = params
+
+                    # For drawing a 2D representation, we'll use x_center, y_center, x_size, y_size.
+                    # Assuming these are normalized (0-1) like 2D boxes.
+                    # This is an assumption as the prompt for 3D boxes doesn't explicitly state normalization.
+
+                    # Clamp normalized coordinates to the [0, 1] range for the 2D projection
+                    norm_xc = max(0.0, min(1.0, x_center))
+                    norm_yc = max(0.0, min(1.0, y_center))
+                    norm_xs = max(0.0, min(1.0, x_size)) # Width
+                    norm_ys = max(0.0, min(1.0, y_size)) # Height
+
+                    # Convert center and size to ymin, xmin, ymax, xmax for 2D box drawing
+                    # xmin_2d = norm_xc - (norm_xs / 2.0)
+                    # ymin_2d = norm_yc - (norm_ys / 2.0)
+                    # xmax_2d = norm_xc + (norm_xs / 2.0)
+                    # ymax_2d = norm_yc + (norm_ys / 2.0)
+
+                    # Corrected: x_center, y_center are usually image coords, x_size, y_size are dimensions.
+                    # Convert to SVG top-left (x,y) and width, height
+                    svg_x = (norm_xc - norm_xs / 2.0) * 100
+                    svg_y = (norm_yc - norm_ys / 2.0) * 100
+                    svg_width = norm_xs * 100
+                    svg_height = norm_ys * 100
+
+                    # Clamp and ensure non-negative dimensions
+                    svg_x = max(0.0, min(100.0 - svg_width, svg_x)) # Ensure box starts within bounds
+                    svg_y = max(0.0, min(100.0 - svg_height, svg_y))
+                    svg_width = max(0.0, min(100.0 - svg_x, svg_width))
+                    svg_height = max(0.0, min(100.0 - svg_y, svg_height))
 
 
-    # Fallback: show image and the JSON data as text.
-    # This is because the notebook's HTML relies on external JS and a specific environment.
+                    # Draw a 2D rectangle representing the base/center of the 3D box
+                    svg_elements += f'<rect x="{svg_x}%" y="{svg_y}%" width="{svg_width}%" height="{svg_height}%" style="fill:green;stroke:green;stroke-width:1;fill-opacity:0.1;stroke-opacity:0.9" />'
+                    svg_elements += f'<text x="{svg_x}%" y="{svg_y}%" dy="-5" fill="white" background="green" font-size="12">{label} (3D)</text>'
+
+                    # Store details for textual display
+                    box_details_list.append(f"<li><b>{label} (3D)</b>: Center:({x_center:.2f}, {y_center:.2f}, {z_center:.2f}), Size:({x_size:.2f}, {y_size:.2f}, {z_size:.2f}), RPY:({roll:.2f}, {pitch:.2f}, {yaw:.2f})</li>")
+                else:
+                    box_details_list.append(f"<li><b>{label} (3D)</b>: Malformed box_3d data (length {len(params)} not 9): {params}</li>")
+            except (TypeError, ValueError, KeyError) as e:
+                box_details_list.append(f"<li>Error parsing 3D box data for '{item.get('label', 'Unknown')}': {e}</li>")
+                continue
+        else:
+            # print(f"Skipping malformed item in 3D boxes_data: {item}")
+            pass
+
+    box_details_html = "<ul>" + "".join(box_details_list) + "</ul>" if box_details_list else "<p>No valid 3D box data to display details for.</p>"
+
     html_content = f"""
-    <h4>3D Bounding Box Data (Raw JSON and Details)</h4>
-    <div style="display: flex; flex-direction: row; gap: 20px;">
-        <div style="flex: 1;">
-            <p><b>Annotated Image (No 3D Overlay - See Data Below):</b></p>
-            <img src="data:image/png;base64,{img_base64}" alt="Base Image" style="max-width: 100%; height: auto;">
+    <h4>3D Bounding Box Visualization (Simplified 2D Projection) and Data</h4>
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="position: relative; display: inline-block; max-width: {pil_image.width}px; max-height: {pil_image.height}px;">
+            <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="Annotated 3D Image" style="max-width: 100%; height: auto; display: block;">
+            <svg width="100%" height="100%" style="position: absolute; top: 0; left: 0; pointer-events: none;">
+                {svg_elements}
+            </svg>
         </div>
-        <div style="flex: 1; background-color: #f0f0f0; padding: 10px; border-radius: 5px;">
-            <p><b>Detected 3D Box Data:</b></p>
-            <pre style="white-space: pre-wrap; word-wrap: break-word;">{json.dumps(parsed_boxes, indent=2)}</pre>
-            <p><b>Formatted Details:</b></p>
+        <div style="background-color: #f0f0f0; padding: 10px; border-radius: 5px;">
+            <p><b>Detected 3D Box Parameters:</b></p>
             {box_details_html}
+            <p><b>Raw Model Output (JSON):</b></p>
+            <pre style="white-space: pre-wrap; word-wrap: break-word;">{json.dumps(parsed_boxes_data, indent=2)}</pre>
         </div>
     </div>
-    <p><small>Note: Full interactive 3D visualization as seen in the cookbook requires a more complex setup (e.g., with three.js) not directly replicable here. Displaying raw data and basic details instead.</small></p>
+    <p><small>Note: Displaying a simplified 2D projection of the 3D boxes. Full interactive 3D visualization is more complex. Assumes x_center, y_center, x_size, y_size from 'box_3d' are normalized [0-1] for 2D projection.</small></p>
     """
     return html_content
