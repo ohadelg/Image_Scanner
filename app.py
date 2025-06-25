@@ -7,7 +7,15 @@ from io import BytesIO
 import zipfile
 import shutil
 import pandas as pd
-from utils.gemini_utils import classify_image_with_gemini, configure_model, get_vision_model
+import json # For handling JSON data for CSV export
+from utils.gemini_utils import get_gemini_client, generate_content_with_gemini, DEFAULT_MODEL_ID, PRO_MODEL_ID
+from utils.visualization_utils import (
+    parse_gemini_json_output,
+    generate_point_html,
+    generate_2d_box_html,
+    generate_3d_box_html,
+    pil_to_base64
+)
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -29,51 +37,106 @@ def cleanup_temp_dir():
         except Exception as e:
             st.warning(f"Could not clean up temporary directory {TEMP_DIR}: {e}")
 
-def display_results(results_data):
-    """Displays classification results and provides download option."""
+def display_analysis_results(results_data, analysis_type):
+    """Displays analysis results based on the type and provides download option."""
     if not results_data:
         st.info("No results to display.")
         return
 
-    st.subheader("Classification Results:")
+    st.subheader("Analysis Results:")
     for i, result in enumerate(results_data):
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            if result.get("Image Bytes"):
-                st.image(result["Image Bytes"], caption=result["Image Name"], width=200)
-            else:
-                st.caption(f"Could not display: {result['Image Name']}")
-        with col2:
-            # st.write(f"**Prompt:** {result['Prompt']}")
-            st.write(f"**Model's Output:**")
-            st.markdown(f"> {result['Classification']}") # Using markdown for blockquote
-        if i < len(results_data) - 1: # Don't add separator after the last item
-            st.markdown("---")
+        st.markdown(f"---")
+        st.markdown(f"#### {result['Image Name']}")
 
-    st.success("Classification complete!")
+        pil_image = None
+        if result.get("Image Bytes"):
+            try:
+                pil_image = Image.open(result["Image Bytes"])
+            except Exception as e:
+                st.error(f"Could not load image {result['Image Name']} for display: {e}")
 
-    # Display results in a DataFrame
+        if analysis_type == "Image Classification":
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                if pil_image:
+                    st.image(pil_image, width=200)
+                else:
+                    st.caption(f"Cannot display: {result['Image Name']}")
+            with col2:
+                st.write(f"**Model's Output (Classification):**")
+                st.markdown(f"> {result.get('Output', 'N/A')}")
+
+        elif analysis_type in ["Point to Items", "2D Bounding Boxes", "3D Bounding Boxes"]:
+            model_output_text = result.get('Output', '')
+            html_was_generated = bool(result.get("HtmlOutput"))
+            json_parse_error_indicated = "(Error parsing JSON)" in model_output_text
+
+            if pil_image and html_was_generated:
+                st.components.v1.html(result["HtmlOutput"], height=pil_image.height + 100 if pil_image.height < 800 else 800, scrolling=True)
+            else: # Fallback if no HTML output or no image
+                if pil_image:
+                    st.image(pil_image, caption=f"Base image: {result['Image Name']}", width=300)
+
+                if json_parse_error_indicated and not model_output_text.startswith("Error:"):
+                    st.warning("Could not parse the model's output as valid JSON. Displaying raw output.")
+                elif model_output_text.startswith("Error:") or model_output_text.startswith("Content blocked"):
+                    st.error(f"Model Error: {model_output_text}")
+
+                st.markdown(f"**Model's Raw Output:**")
+                st.text_area("Raw Output", value=model_output_text, height=150, disabled=True, key=f"raw_output_{i}")
+
+        elif analysis_type == "Segmentation Masks":
+            st.info("Segmentation mask display is not yet fully implemented.")
+            if pil_image:
+                st.image(pil_image, caption=f"Base image: {result['Image Name']}", width=300)
+            st.markdown(f"**Model's Raw Output (Segmentation):** \n```\n{result.get('Output', 'N/A')}\n```")
+
+        # Display raw output for debugging or if HTML failed
+        if analysis_type not in ["Image Classification"] and not result.get("HtmlOutput"):
+             with st.expander("View Raw Output from Model"):
+                st.json(result.get('Output', '{}'))
+
+
+    st.success(f"{analysis_type} complete!")
+
+    # Prepare DataFrame for display and download
+    df_display_cols = ["Image Name", "Prompt", "Output"]
+    if "AnalysisType" not in [r.get("AnalysisType") for r in results_data if r]: # ensure column exists
+        for r in results_data: r["AnalysisType"] = analysis_type # Add analysis type if not present
+
     df_results = pd.DataFrame(results_data)
-    # Reorder columns for better readability
-    if "Image Bytes" in df_results.columns: # Image Bytes not needed in CSV
-        display_df = df_results[["Image Name", "Prompt", "Classification"]]
-    else:
-        display_df = df_results
+
+    # Ensure 'Output' column exists, even if it's from 'Classification' field
+    if "Classification" in df_results.columns and "Output" not in df_results.columns:
+        df_results["Output"] = df_results["Classification"]
+
+    # Select columns for DataFrame display, ensuring they exist
+    cols_to_display_in_df = [col for col in df_display_cols if col in df_results.columns]
+    if not cols_to_display_in_df and "Image Name" in df_results.columns: # Minimal fallback
+        cols_to_display_in_df = ["Image Name"]
+
+    display_df = df_results[cols_to_display_in_df] if cols_to_display_in_df else pd.DataFrame()
+
 
     st.subheader("Summary of Results:")
-    st.dataframe(display_df)
+    if not display_df.empty:
+        st.dataframe(display_df)
 
-    # Download results as CSV
-    csv_data = display_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Results as CSV",
-        data=csv_data,
-        file_name="gemini_classification_results.csv",
-        mime="text/csv",
-    )
+        # Download results as CSV - include raw output
+        csv_df = df_results[["Image Name", "Prompt", "Output", "AnalysisType"]] if "Output" in df_results.columns else df_results[["Image Name", "Prompt", "AnalysisType"]]
+        csv_data = csv_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Results as CSV",
+            data=csv_data,
+            file_name=f"gemini_{analysis_type.lower().replace(' ', '_')}_results.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info("No data to display in summary table.")
+
 
 # --- Main Application UI ---
-st.title("🔍 Visual Content Analyzer with VLM")
+st.title("🔍 Visual Content Analyzer with Gemini")
 st.markdown(
     "Upload a **ZIP file** containing your images, provide a classification prompt, "
     "and let the model will analyze them!"
@@ -82,14 +145,13 @@ st.markdown(
 # --- API Key Configuration Check ---
 api_key_configured = False
 try:
-    configure_model() # Attempt to configure Gemini (loads .env)
-    get_vision_model() # Check if model can be fetched
+    get_gemini_client() # Attempt to initialize the Gemini client
     api_key_configured = True
-    st.sidebar.success("VLM API Key configured successfully.")
+    st.sidebar.success("Gemini API Client initialized successfully.")
 except (ValueError, ConnectionError) as e:
     st.error(
-        f"**Error configuring Gemini API:** {e}. "
-        "Please ensure your `VLM_API_KEY` is correctly set in a `.env` file "
+        f"**Error initializing Gemini API Client:** {e}. "
+        "Please ensure your `GEMINI_API_KEY` is correctly set in a `.env` file. "
     )
     st.markdown(
         "Refer to the `README.md` for instructions on setting up your API key."
@@ -105,21 +167,54 @@ uploaded_zip_file = st.file_uploader(
     help="Ensure the ZIP file contains image files (e.g., .png, .jpg, .jpeg)."
 )
 
-st.header("2. Enter Your Classification Prompt")
-default_prompt = "Describe the main objects in this image and categorize it (e.g., nature, urban, abstract).\n"
-default_prompt += "Return just one of the options: dog, cat, cow as output."
+st.header("2. Select Analysis Type and Provide Instructions")
+
+analysis_types = [
+    "Image Classification",
+    "Point to Items",
+    "2D Bounding Boxes",
+    "Segmentation Masks",
+    "3D Bounding Boxes"
+]
+selected_analysis_type = st.selectbox(
+    "Choose the type of analysis:",
+    options=analysis_types,
+    index=0
+)
+
+# Dynamic prompt area based on analysis type
+prompt_label = "Enter your instructions for the VLM:"
+default_prompt_text = {
+    "Image Classification": "Describe the main objects in this image and categorize it (e.g., nature, urban, abstract).\nReturn just one of the options: dog, cat, cow as output.",
+    "Point to Items": "Point to no more than 10 items in the image. Include their labels.\nThe answer should follow the json format: [{\"point\": [y, x], \"label\": \"description\"}, ...]. Points are normalized to 0-1000.",
+    "2D Bounding Boxes": "Detect objects in this image and provide their 2D bounding boxes and labels.\nThe answer should follow the json format: [{\"box_2d\": [ymin, xmin, ymax, xmax], \"label\": \"description\"}, ...]. Coordinates are normalized.",
+    "Segmentation Masks": "Segment the main objects in this image and provide their masks and labels. (Further details needed on expected JSON format for masks)",
+    "3D Bounding Boxes": "Detect the 3D bounding boxes of no more than 10 items.\nOutput a json list where each entry contains the object name in \"label\" and its 3D bounding box in \"box_3d\": [x_center, y_center, z_center, x_size, y_size, z_size, roll, pitch, yaw]."
+}
+
+prompt_help_text = {
+    "Image Classification": "Examples: 'What objects are in this image?', 'Is this image related to nature or urban environments?'",
+    "Point to Items": "Clearly describe what items to point to, or ask for general items. Specify JSON output if needed.",
+    "2D Bounding Boxes": "Specify if you want all objects or specific ones. JSON output for coordinates is recommended.",
+    "Segmentation Masks": "Describe the objects to segment. The exact output format for masks needs to be defined based on model capabilities.",
+    "3D Bounding Boxes": "Specify the objects of interest. The model expects a specific JSON output format for 3D boxes."
+}
+
+if selected_analysis_type == "Image Classification":
+    prompt_label = "Enter Your Classification Prompt:"
+
 prompt_text = st.text_area(
-    "Enter the prompt for VLM to analyze (Don't forget to delete the default prompt):",
-    value=default_prompt,
-    height=100,
-    help="Examples: 'What objects are in this image?', 'Is this image related to nature or urban environments?', 'Categorize these images as animals, plants, or vehicles.'"
+    label=prompt_label,
+    value=default_prompt_text.get(selected_analysis_type, "Please provide instructions for the selected analysis type."),
+    height=150,
+    help=prompt_help_text.get(selected_analysis_type, "Provide clear instructions for the AI model.")
 )
 
 # --- Process Images Button ---
-classify_button = st.button("Classify Images", type="primary", disabled=not api_key_configured)
+analyze_button = st.button("Analyze Images", type="primary", disabled=not api_key_configured)
 
 # --- Logic for Processing ---
-if classify_button:
+if analyze_button:
     if uploaded_zip_file is None:
         st.error("❌ Please upload a ZIP file containing images.")
     elif not prompt_text.strip():
@@ -161,44 +256,100 @@ if classify_button:
                             image_bytes = f.read() # Read as bytes
 
                         # Store path for display, use BytesIO for PIL and Gemini
-                        pil_image_bytes = BytesIO(image_bytes)
+                        # Create a new BytesIO object for each iteration if it's consumed or closed
+                        pil_image_display_bytes = BytesIO(image_bytes)
 
-                        classification_result = classify_image_with_gemini(image_bytes, prompt_text)
-
-                        results_data.append({
+                        model_output = None
+                        html_output_for_display = None
+                        current_result_data = {
                             "Image Name": image_name,
                             "Prompt": prompt_text,
-                            "Classification": classification_result,
-                            "Image Bytes": pil_image_bytes # For display
-                        })
+                            "Image Bytes": pil_image_display_bytes, # For display in Streamlit
+                            "AnalysisType": selected_analysis_type,
+                            "Output": "Error: Processing failed before model call." # Default
+                        }
+
+                        gen_config = None
+                        model_to_use = DEFAULT_MODEL_ID
+
+                        if selected_analysis_type == "Image Classification":
+                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use)
+                            current_result_data["Output"] = model_output
+
+                        elif selected_analysis_type == "Point to Items":
+                            gen_config = google_genai_types.GenerateContentConfig(temperature=0.5)
+                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use, generation_config_params={'temperature': 0.5})
+                            current_result_data["Output"] = model_output
+                            if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
+                                parsed_json = parse_gemini_json_output(model_output)
+                                if parsed_json:
+                                    pil_img_for_html = Image.open(BytesIO(image_bytes)) # Re-open for HTML gen
+                                    html_output_for_display = generate_point_html(pil_img_for_html, parsed_json, image_id=f"img_{i}")
+                                else:
+                                    current_result_data["Output"] += " (Error parsing JSON)"
+
+                        elif selected_analysis_type == "2D Bounding Boxes":
+                            # Assuming similar config, can be adjusted
+                            gen_config = google_genai_types.GenerateContentConfig(temperature=0.2) # Lower temp for structured output
+                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use, generation_config_params={'temperature': 0.2})
+                            current_result_data["Output"] = model_output
+                            if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
+                                parsed_json = parse_gemini_json_output(model_output)
+                                if parsed_json:
+                                    pil_img_for_html = Image.open(BytesIO(image_bytes))
+                                    html_output_for_display = generate_2d_box_html(pil_img_for_html, parsed_json, image_id=f"img_{i}")
+                                else:
+                                    current_result_data["Output"] += " (Error parsing JSON)"
+
+                        elif selected_analysis_type == "3D Bounding Boxes":
+                            # May benefit from Pro model, but let's test with default first.
+                            # model_to_use = PRO_MODEL_ID
+                            gen_config = google_genai_types.GenerateContentConfig(temperature=0.5)
+                            model_output = generate_content_with_gemini(image_bytes, prompt_text, model_id=model_to_use, generation_config_params={'temperature': 0.5})
+                            current_result_data["Output"] = model_output
+                            if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
+                                # generate_3d_box_html expects the raw JSON string
+                                pil_img_for_html = Image.open(BytesIO(image_bytes))
+                                html_output_for_display = generate_3d_box_html(pil_img_for_html, model_output, image_id=f"img_{i}")
+                                # No separate JSON parsing check here as generate_3d_box_html does it
+
+                        elif selected_analysis_type == "Segmentation Masks":
+                            # Placeholder - requires specific model/prompt tuning
+                            model_output = f"Segmentation mask analysis for '{image_name}' is not fully implemented. Prompt: {prompt_text}"
+                            st.warning(model_output) # Show once
+                            current_result_data["Output"] = model_output
+
+                        if html_output_for_display:
+                            current_result_data["HtmlOutput"] = html_output_for_display
+
+                        results_data.append(current_result_data)
                         image_files_processed_paths.append(image_path)
 
-                    except ValueError as ve: # From classify_image_with_gemini if image data is invalid
-                        st.error(f"Skipping '{image_name}': Invalid image data. {ve}")
+                    except ValueError as ve:
+                        st.error(f"Skipping '{image_name}': Invalid image data or value error. {ve}")
                         results_data.append({
-                            "Image Name": image_name,
-                            "Prompt": prompt_text,
-                            "Classification": f"Error: Invalid image data - {ve}",
-                            "Image Bytes": None
+                            "Image Name": image_name, "Prompt": prompt_text, "AnalysisType": selected_analysis_type,
+                            "Output": f"Error: Invalid image data - {ve}", "Image Bytes": None
                         })
-                    except ConnectionError as ce: # From Gemini utils if API key issue arises mid-process
+                    except ConnectionError as ce:
                         st.error(f"API Connection Error while processing '{image_name}': {ce}. Please check your API key and internet connection.")
-                        # Optionally break or allow continuing with other images
+                        results_data.append({
+                            "Image Name": image_name, "Prompt": prompt_text, "AnalysisType": selected_analysis_type,
+                            "Output": f"Error: API Connection - {ce}", "Image Bytes": None
+                        })
                         break
                     except Exception as e:
-                        st.error(f"An unexpected error occurred while processing '{image_name}': {e}")
+                        st.error(f"An unexpected error occurred while processing '{image_name}': {type(e).__name__} - {e}")
                         results_data.append({
-                            "Image Name": image_name,
-                            "Prompt": prompt_text,
-                            "Classification": f"Error: {e}",
-                            "Image Bytes": None
+                            "Image Name": image_name, "Prompt": prompt_text, "AnalysisType": selected_analysis_type,
+                            "Output": f"Error: {type(e).__name__} - {e}", "Image Bytes": None
                         })
 
                     progress_bar.progress((i + 1) / total_images)
 
                 status_text.text(f"Processed {len(image_files_processed_paths)} of {total_images} images.")
                 if results_data:
-                    display_results(results_data)
+                    display_analysis_results(results_data, selected_analysis_type)
                 else:
                     st.info("No images were processed or no results to display.")
 
@@ -244,5 +395,5 @@ st.sidebar.markdown(
 
 # Clean up temp directory on script rerun if it somehow persists
 # This is a fallback, primary cleanup is in the processing block
-if os.path.exists(TEMP_DIR) and not classify_button: # Avoid cleaning if processing just finished
+if os.path.exists(TEMP_DIR) and not analyze_button: # Avoid cleaning if processing just finished
     cleanup_temp_dir()

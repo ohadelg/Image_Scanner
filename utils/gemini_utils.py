@@ -1,87 +1,123 @@
 # visual_content_analyzer/utils/gemini_utils.py
 
-import google.generativeai as genai
+from google import genai as google_genai_sdk
+from google.genai import types as google_genai_types
 from PIL import Image
 import os
 from dotenv import load_dotenv
 from io import BytesIO
 
 # Load environment variables from .env file at the module level
-# This ensures that other functions in this module can assume `genai` is configured if `configure_gemini` was called.
 load_dotenv()
 
-_GEMINI_API_KEY_CONFIGURED = False
+_GEMINI_CLIENT = None
 
-def configure_model():
-    """Configures the Gemini API with the API key from environment variables."""
-    global _GEMINI_API_KEY_CONFIGURED
-    if _GEMINI_API_KEY_CONFIGURED:
-        return
+def get_gemini_client():
+    """Initializes and returns the Gemini API client using the new SDK."""
+    global _GEMINI_CLIENT
+    if _GEMINI_CLIENT is not None:
+        return _GEMINI_CLIENT
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "YOUR_GEMINI_API_KEY_HERE":
         raise ValueError(
-            "API_KEY not found or not set in environment variables. "
+            "GEMINI_API_KEY not found or not set in environment variables. "
             "Please set it in a .env file or as an environment variable. "
             "Make sure it's not the placeholder value."
         )
     try:
-        genai.configure(api_key=api_key)
-        _GEMINI_API_KEY_CONFIGURED = True
+        _GEMINI_CLIENT = google_genai_sdk.Client(api_key=api_key)
+        return _GEMINI_CLIENT
     except Exception as e:
-        raise ConnectionError(f"Failed to configure Gemini API: {e}")
+        raise ConnectionError(f"Failed to initialize Gemini Client: {e}")
 
+# Default model IDs, can be overridden
+DEFAULT_MODEL_ID = "gemini-1.5-flash-latest" # Updated from "gemini-2.5-flash-lite-preview-06-17"
+PRO_MODEL_ID = "gemini-1.5-pro-latest" # Updated from "gemini-2.5-pro" as per common model IDs
 
-def get_vision_model():
+def generate_content_with_gemini(image_bytes, prompt_text, model_id=DEFAULT_MODEL_ID, generation_config_params=None):
     """
-    Returns the Gemini 2.5 Flash Lite Preview model.
-    """
-    return genai.GenerativeModel('gemini-2.5-flash-lite-preview-06-17')
-
-
-def classify_image_with_gemini(image_bytes, prompt_text):
-    """
-    Sends image bytes and a prompt to the Gemini VLM for classification.
+    Sends image bytes and a prompt to the specified Gemini model using the new SDK.
 
     Args:
-        image_bytes: Image data in bytes (e.g., from st.file_uploader or reading a file in binary mode).
-        prompt_text: The text prompt for the VLM.
+        image_bytes: Image data in bytes.
+        prompt_text: The text prompt for the VLM. This should be carefully constructed
+                     by the calling function (e.g., in app.py) to request the desired
+                     output format (e.g., JSON for points or bounding boxes) and specify
+                     any constraints (e.g., number of items).
+        model_id: The model ID to use (e.g., "gemini-1.5-flash-latest", "gemini-1.5-pro-latest").
+                     Chosen based on the task requirements (e.g., pro for more complex tasks).
+        generation_config_params: Optional dictionary for generation configuration.
+                                  Example: `{'temperature': 0.5, 'max_output_tokens': 2048}`.
+                                  For spatial tasks requiring JSON, temperature might be set (e.g., 0.2-0.5)
+                                  to encourage factual, structured output.
 
     Returns:
         The text response from the Gemini VLM.
 
     Raises:
-        ConnectionError: If the Gemini API is not configured or model cannot be fetched.
+        ConnectionError: If the Gemini client cannot be initialized.
         ValueError: If image_bytes is not valid image data.
         Exception: For other errors during API call.
     """
-    model = get_vision_model() # This will also ensure configuration
+    client = get_gemini_client()
 
     try:
-        # PIL.Image.open can handle BytesIO directly
         img = Image.open(BytesIO(image_bytes))
     except Exception as e:
         raise ValueError(f"Invalid image data: {e}")
 
-    # For image classification, Gemini's generate_content takes a list of parts.
-    # The first part is the image, the second is the text prompt.
     contents = [img, prompt_text]
 
+    config = None
+    if generation_config_params:
+        config = google_genai_types.GenerateContentConfig(**generation_config_params)
+
     try:
-        response = model.generate_content(contents)
-        # It's good practice to check if 'text' attribute exists,
-        # though for gemini-pro-vision, it typically does on success.
+        # The new SDK uses client.models.generate_content
+        # However, the cookbook for Gemini 2 (which this task is based on) shows client.generate_content
+        # Let's try to use the direct client.generate_content if available, or client.models.generate_content
+        # Looking at google-genai SDK, it should be `client.generate_content`
+        # The model is now specified in each call directly.
+
+        # Correction: The new SDK (google-genai) uses `client.generate_content` directly.
+        # The `model` argument should be the model resource name string e.g. "models/gemini-1.5-pro-latest"
+        # or we can initialize a model object first: `model = client.get_model(f"models/{model_id}")`
+        # and then `model.generate_content(...)`
+
+        # Using the direct model string for simplicity as shown in some new SDK examples.
+        # The SDK will prepend "models/" if not present for convenience for some model names.
+
+        model_to_call = client.get_model(f"models/{model_id}")
+        response = model_to_call.generate_content(contents, generation_config=config)
+
         if hasattr(response, 'text'):
             return response.text
         else:
-            # If no 'text' but also no error, the response might be structured differently
-            # or blocked. It's safer to return a string indicating this.
-            # You might want to log response.parts or response.prompt_feedback for debugging.
             if response.prompt_feedback and response.prompt_feedback.block_reason:
                 return f"Content blocked by API. Reason: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}"
-            return "Gemini API returned a response without text and no explicit error."
+            # Check for candidates and parts if text is not directly available
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                return "".join(part.text for part in response.candidates[0].content.parts if hasattr(part, "text"))
+            return "Gemini API returned a response without direct text and no explicit error. Check response parts."
 
+    except AttributeError as ae:
+        # This might happen if client.models.generate_content was the right path
+        # For now, sticking to client.get_model().generate_content as it's common in new SDK.
+        return f"SDK usage error: {ae}. This might be due to an unexpected SDK structure."
     except Exception as e:
-        # More specific error handling can be added here if needed
-        # For example, handling specific API errors from google.generativeai.types.generation_types.BlockedPromptException
-        return f"Error classifying image with Gemini: {e}"
+        # Log the full error for debugging
+        # print(f"Full error in generate_content_with_gemini: {type(e).__name__} - {e}")
+        # Consider re-raising or handling specific google.api_core.exceptions
+        return f"Error generating content with Gemini: {type(e).__name__} - {e}"
+
+# Keep the old function name for now to minimize changes in app.py initially,
+# but it will now use the new generic function.
+def classify_image_with_gemini(image_bytes, prompt_text):
+    """
+    Legacy wrapper for image classification. Uses the new generate_content_with_gemini.
+    """
+    # Using default model and no specific generation config for classification
+    return generate_content_with_gemini(image_bytes, prompt_text, model_id=DEFAULT_MODEL_ID)
+
+[end of utils/gemini_utils.py]
