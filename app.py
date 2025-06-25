@@ -58,23 +58,60 @@ def _process_single_image(image_bytes: bytes, full_prompt: str, analysis_type: s
     Processes a single image with Gemini.
     Returns: (model_output, parsed_json_if_applicable, error_message_if_any)
     """
+    # Debug logging
+    print("=" * 80)
+    print("🔍 IMAGE PROCESSING DEBUG LOG")
+    print("=" * 80)
+    print(f"📁 Analysis Type: {analysis_type}")
+    print(f"🤖 Model ID: {model_id}")
+    print(f"📝 Full Prompt Length: {len(full_prompt)} characters")
+    print(f"📝 Full Prompt Preview: {full_prompt[:200]}...")
+    print(f"🖼️  Image Size: {len(image_bytes)} bytes")
+    print("-" * 80)
+    
     generation_config = _get_generation_config(analysis_type)
+    print(f"⚙️  Generation Config: {generation_config}")
+    
     model_output = generate_content_with_gemini(
         image_bytes,
         full_prompt,
         model_id=model_id,
         generation_config_params=generation_config
     )
+    
+    print(f"🤖 Raw Model Output Length: {len(model_output)} characters")
+    print(f"🤖 Raw Model Output Preview: {model_output[:200]}...")
+    print("-" * 80)
 
     if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
         if analysis_type in ["Point to Items", "2D Bounding Boxes"]: # Types that expect simple JSON list output
+            print(f"🔍 Parsing JSON for {analysis_type}...")
             parsed_json = parse_gemini_json_output(model_output)
             if not parsed_json:
+                print(f"❌ JSON parsing failed for {analysis_type}")
+                print("=" * 80)
+                print("🔍 END IMAGE PROCESSING DEBUG LOG")
+                print("=" * 80)
                 return model_output + " (Error parsing JSON - Model output was not valid JSON format)", None, "JSON parsing failed"
-            return model_output, parsed_json, None
+            else:
+                print(f"✅ JSON parsing successful for {analysis_type}")
+                print(f"📊 Parsed JSON: {parsed_json}")
+                print("=" * 80)
+                print("🔍 END IMAGE PROCESSING DEBUG LOG")
+                print("=" * 80)
+                return model_output, parsed_json, None
         # For 3D Bounding Boxes, HTML generation handles parsing. For Classification/Segmentation, no direct JSON parsing needed here.
+        print(f"✅ Model output received for {analysis_type} (no JSON parsing needed)")
+        print("=" * 80)
+        print("🔍 END IMAGE PROCESSING DEBUG LOG")
+        print("=" * 80)
         return model_output, None, None # No direct parsing needed at this stage for these types or handled later
-    return model_output, None, model_output # Error or blocked content
+    else:
+        print(f"❌ Model error or blocked content: {model_output}")
+        print("=" * 80)
+        print("🔍 END IMAGE PROCESSING DEBUG LOG")
+        print("=" * 80)
+        return model_output, None, model_output # Error or blocked content
 
 
 def display_analysis_results(results_data, analysis_type):
@@ -339,6 +376,13 @@ if analyze_button:
                 for i, image_path in enumerate(image_files):
                     image_name = os.path.basename(image_path)
                     status_text.text(f"Processing '{image_name}' ({i + 1}/{total_images})...")
+
+                    # Debug logging for image processing
+                    print("=" * 80)
+                    print(f"🖼️  PROCESSING IMAGE: {image_name}")
+                    print(f"📁 Image Path: {image_path}")
+                    print(f"📊 Image Index: {i + 1}/{total_images}")
+                    print("=" * 80)
 
                     try:
                         with open(image_path, "rb") as f:

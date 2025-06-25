@@ -14,6 +14,14 @@ def parse_gemini_json_output(json_output_str: str) -> dict | list | None:
     if not json_output_str:
         return None
 
+    # Debug logging
+    print("=" * 80)
+    print("🔍 JSON PARSER DEBUG LOG")
+    print("=" * 80)
+    print(f"📥 Input message length: {len(json_output_str)} characters")
+    print(f"📥 Input message preview: {json_output_str[:200]}...")
+    print("-" * 80)
+
     # Remove markdown fencing if present
     cleaned_str = json_output_str.strip()
     
@@ -22,17 +30,122 @@ def parse_gemini_json_output(json_output_str: str) -> dict | list | None:
         cleaned_str = cleaned_str[7:] # Remove ```json
         if cleaned_str.endswith("```"):
             cleaned_str = cleaned_str[:-3] # Remove ```
+        print("🔄 Removed ```json markdown fencing")
     elif cleaned_str.startswith("```"):
         cleaned_str = cleaned_str[3:]
         if cleaned_str.endswith("```"):
             cleaned_str = cleaned_str[:-3]
+        print("🔄 Removed ``` markdown fencing")
 
     cleaned_str = cleaned_str.strip()
+    print(f"🧹 Cleaned message length: {len(cleaned_str)} characters")
+    print(f"🧹 Cleaned message preview: {cleaned_str[:200]}...")
 
     # Try to parse the cleaned string
     try:
-        return json.loads(cleaned_str)
+        parsed_data = json.loads(cleaned_str)
+        print("✅ Successfully parsed JSON on first attempt")
+        print(f"📊 Parsed data type: {type(parsed_data)}")
+        print(f"📊 Parsed data: {parsed_data}")
+        
+        # Post-process the parsed data to fix common model output issues
+        if isinstance(parsed_data, list):
+            print(f"📋 Processing {len(parsed_data)} items in list")
+            for i, item in enumerate(parsed_data):
+                if isinstance(item, dict) and "box_2d" in item:
+                    print(f"   📦 Item {i+1}: Found box_2d field")
+                    # Fix the case where box_2d contains objects instead of flat array
+                    box_2d = item["box_2d"]
+                    print(f"   📦 Item {i+1}: Original box_2d: {box_2d}")
+                    if isinstance(box_2d, list) and len(box_2d) > 0:
+                        if isinstance(box_2d[0], dict):
+                            # Convert from [{"ymin": 238, "xmin": 270, ...}, "label"] to [238, 270, 818, 511]
+                            coords = box_2d[0]
+                            if "ymin" in coords and "xmin" in coords and "ymax" in coords and "xmax" in coords:
+                                item["box_2d"] = [coords["ymin"], coords["xmin"], coords["ymax"], coords["xmax"]]
+                                print(f"   🔄 Item {i+1}: Fixed box_2d format: {item['box_2d']}")
+                            else:
+                                print(f"   ❌ Item {i+1}: Missing required coordinate fields in box_2d")
+                        else:
+                            print(f"   ✅ Item {i+1}: box_2d already in correct format")
+                    else:
+                        print(f"   ❌ Item {i+1}: box_2d is not a valid list")
+        
+        print("=" * 80)
+        print("🔍 END JSON PARSER DEBUG LOG")
+        print("=" * 80)
+        return parsed_data
     except json.JSONDecodeError as e:
+        print(f"❌ JSON decode error on first attempt: {e}")
+        print("🔄 Trying alternative parsing methods...")
+        
+        # Fix missing commas issue
+        print("🔧 Attempting to fix missing commas...")
+        fixed_str = cleaned_str
+        # Add missing commas after objects in arrays
+        fixed_str = re.sub(r'}(\s*)"label"', r'},\1"label"', fixed_str)
+        
+        try:
+            parsed_data = json.loads(fixed_str)
+            print("✅ Successfully parsed JSON after fixing commas")
+            print(f"📊 Parsed data: {parsed_data}")
+            
+            # Apply the same post-processing
+            if isinstance(parsed_data, list):
+                for i, item in enumerate(parsed_data):
+                    if isinstance(item, dict) and "box_2d" in item:
+                        box_2d = item["box_2d"]
+                        if isinstance(box_2d, list) and len(box_2d) > 0:
+                            if isinstance(box_2d[0], dict):
+                                coords = box_2d[0]
+                                if "ymin" in coords and "xmin" in coords and "ymax" in coords and "xmax" in coords:
+                                    item["box_2d"] = [coords["ymin"], coords["xmin"], coords["ymax"], coords["xmax"]]
+                                    print(f"🔄 Fixed box_2d format: {item['box_2d']}")
+            
+            print("=" * 80)
+            print("🔍 END JSON PARSER DEBUG LOG")
+            print("=" * 80)
+            return parsed_data
+        except json.JSONDecodeError:
+            print("❌ Still failed after fixing commas")
+        
+        # Try to fix the structure where label is inside box_2d array
+        print("🔧 Attempting to fix malformed box_2d structure...")
+        try:
+            # Pattern to match the malformed structure and fix it
+            # From: [{"box_2d": [{"ymin": 166, ...}, "label": "dog"]}]
+            # To:   [{"box_2d": [166, 318, 876, 776], "label": "dog"}]
+            
+            # Extract coordinates and labels using regex
+            coord_pattern = r'"ymin":\s*(\d+).*?"xmin":\s*(\d+).*?"ymax":\s*(\d+).*?"xmax":\s*(\d+)'
+            label_pattern = r'"label":\s*"([^"]+)"'
+            
+            coords_matches = re.findall(coord_pattern, cleaned_str, re.DOTALL)
+            labels = re.findall(label_pattern, cleaned_str)
+            
+            if coords_matches and labels:
+                print(f"🔧 Found {len(coords_matches)} coordinate sets and {len(labels)} labels")
+                
+                # Construct valid JSON
+                items = []
+                for i, (ymin, xmin, ymax, xmax) in enumerate(coords_matches):
+                    if i < len(labels):
+                        item = {
+                            "box_2d": [int(ymin), int(xmin), int(ymax), int(xmax)],
+                            "label": labels[i]
+                        }
+                        items.append(item)
+                
+                if items:
+                    result = items
+                    print(f"✅ Successfully reconstructed JSON: {result}")
+                    print("=" * 80)
+                    print("🔍 END JSON PARSER DEBUG LOG")
+                    print("=" * 80)
+                    return result
+        except Exception as e:
+            print(f"❌ Structure fix failed: {e}")
+        
         # First attempt: try to find JSON within the text
         json_patterns = [
             r'\[.*\]',  # Array pattern
@@ -41,37 +154,41 @@ def parse_gemini_json_output(json_output_str: str) -> dict | list | None:
         
         for pattern in json_patterns:
             matches = re.findall(pattern, cleaned_str, re.DOTALL)
-            for match in matches:
+            print(f"🔍 Found {len(matches)} matches for pattern {pattern}")
+            for j, match in enumerate(matches):
                 try:
-                    return json.loads(match)
-                except json.JSONDecodeError:
-                    continue
-        
-        # Second attempt: try to fix common issues
-        # Remove any text before the first [ or {
-        for char in ['[', '{']:
-            if char in cleaned_str:
-                start_idx = cleaned_str.find(char)
-                potential_json = cleaned_str[start_idx:]
-                try:
-                    return json.loads(potential_json)
-                except json.JSONDecodeError:
-                    continue
-        
-        # Third attempt: try to extract JSON from common model response patterns
-        # Sometimes models add explanatory text
-        lines = cleaned_str.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line.startswith('[') or line.startswith('{'):
-                try:
-                    return json.loads(line)
+                    # Try to fix the match
+                    fixed_match = re.sub(r'}(\s*)"label"', r'},\1"label"', match)
+                    parsed_data = json.loads(fixed_match)
+                    print(f"✅ Successfully parsed JSON using pattern {pattern}, match {j+1}")
+                    print(f"📊 Parsed data: {parsed_data}")
+                    
+                    # Apply the same post-processing
+                    if isinstance(parsed_data, list):
+                        for i, item in enumerate(parsed_data):
+                            if isinstance(item, dict) and "box_2d" in item:
+                                box_2d = item["box_2d"]
+                                if isinstance(box_2d, list) and len(box_2d) > 0:
+                                    if isinstance(box_2d[0], dict):
+                                        coords = box_2d[0]
+                                        if "ymin" in coords and "xmin" in coords and "ymax" in coords and "xmax" in coords:
+                                            item["box_2d"] = [coords["ymin"], coords["xmin"], coords["ymax"], coords["xmax"]]
+                                            print(f"🔄 Fixed box_2d format: {item['box_2d']}")
+                    
+                    print("=" * 80)
+                    print("🔍 END JSON PARSER DEBUG LOG")
+                    print("=" * 80)
+                    return parsed_data
                 except json.JSONDecodeError:
                     continue
         
         # If all attempts fail, return None and log the issue
-        print(f"Failed to parse JSON from model output. Original: {json_output_str[:200]}...")
-        print(f"Cleaned: {cleaned_str[:200]}...")
+        print("❌ All parsing attempts failed")
+        print(f"📥 Original input: {json_output_str[:200]}...")
+        print(f"🧹 Cleaned input: {cleaned_str[:200]}...")
+        print("=" * 80)
+        print("🔍 END JSON PARSER DEBUG LOG")
+        print("=" * 80)
         return None
 
 
@@ -145,7 +262,8 @@ def generate_2d_box_html(pil_image: Image.Image, boxes_data: list, image_id: str
     Generates an HTML string to display an image with 2D bounding boxes overlaid.
     Args:
         pil_image: The PIL Image object.
-        boxes_data: A list of dictionaries, where each dict has "box_2d": [ymin, xmin, ymax, xmax] (normalized 0-1)
+        boxes_data: A list of dictionaries, where each dict has "box_2d": [ymin, xmin, ymax, xmax] 
+                     (can be normalized 0-1 or absolute pixel coordinates)
                      and "label": "description".
         image_id: A unique ID for the image element in HTML.
     Returns:
@@ -157,45 +275,144 @@ def generate_2d_box_html(pil_image: Image.Image, boxes_data: list, image_id: str
     if not isinstance(boxes_data, list):
         boxes_data = []
 
-    for item in boxes_data:
+    # Comprehensive debug logging
+    print("=" * 80)
+    print("🔍 2D BOUNDING BOX DEBUG LOG")
+    print("=" * 80)
+    print(f"📁 Image ID: {image_id}")
+    print(f"📐 Image Dimensions: {pil_image.width} x {pil_image.height} pixels")
+    print(f"📐 Image Mode: {pil_image.mode}")
+    print(f"📐 Image Format: {pil_image.format}")
+    print(f"📦 Number of boxes received: {len(boxes_data)}")
+    print(f"📋 Raw boxes data: {boxes_data}")
+    print("-" * 80)
+    
+    for i, item in enumerate(boxes_data):
         if isinstance(item, dict) and "box_2d" in item and "label" in item:
             try:
                 ymin_raw, xmin_raw, ymax_raw, xmax_raw = item["box_2d"]
                 label = item["label"]
+                
+                print(f"📦 Box {i+1}: '{label}'")
+                print(f"   📊 Raw coordinates: ymin={ymin_raw}, xmin={xmin_raw}, ymax={ymax_raw}, xmax={xmax_raw}")
 
-                # Clamp normalized coordinates to the [0, 1] range
-                ymin = max(0.0, min(1.0, ymin_raw))
-                xmin = max(0.0, min(1.0, xmin_raw))
-                ymax = max(0.0, min(1.0, ymax_raw))
-                xmax = max(0.0, min(1.0, xmax_raw))
+                # Determine if coordinates are normalized (0-1) or absolute pixels
+                # If any coordinate is > 1, assume they are absolute pixel coordinates
+                is_normalized = all(coord <= 1.0 for coord in [ymin_raw, xmin_raw, ymax_raw, xmax_raw])
+                
+                if is_normalized:
+                    print(f"   🔄 Using normalized coordinates (0-1)")
+                    # Clamp normalized coordinates to the [0, 1] range
+                    ymin = max(0.0, min(1.0, ymin_raw))
+                    xmin = max(0.0, min(1.0, xmin_raw))
+                    ymax = max(0.0, min(1.0, ymax_raw))
+                    xmax = max(0.0, min(1.0, xmax_raw))
+                else:
+                    print(f"   🔄 Converting absolute pixel coordinates to normalized")
+                    print(f"   📏 Image bounds: width={pil_image.width}, height={pil_image.height}")
+                    
+                    # Check if coordinates are within image bounds
+                    if (xmin_raw >= pil_image.width or xmax_raw >= pil_image.width or 
+                        ymin_raw >= pil_image.height or ymax_raw >= pil_image.height):
+                        print(f"   ⚠️  WARNING: Coordinates outside image bounds!")
+                        print(f"   📏 Image: {pil_image.width}x{pil_image.height}, Coords: xmin={xmin_raw}, xmax={xmax_raw}, ymin={ymin_raw}, ymax={ymax_raw}")
+                        
+                        # Try to scale coordinates to fit within image bounds
+                        # Find the maximum scale factor needed
+                        scale_x = min(1.0, (pil_image.width - 1) / max(xmax_raw, 1))
+                        scale_y = min(1.0, (pil_image.height - 1) / max(ymax_raw, 1))
+                        scale_factor = min(scale_x, scale_y)
+                        
+                        print(f"   🔧 Scaling coordinates by factor: {scale_factor:.4f}")
+                        
+                        # Scale the coordinates
+                        xmin_raw = xmin_raw * scale_factor
+                        xmax_raw = xmax_raw * scale_factor
+                        ymin_raw = ymin_raw * scale_factor
+                        ymax_raw = ymax_raw * scale_factor
+                        
+                        print(f"   📐 Scaled coordinates: xmin={xmin_raw:.1f}, xmax={xmax_raw:.1f}, ymin={ymin_raw:.1f}, ymax={ymax_raw:.1f}")
+                    
+                    # Convert absolute pixel coordinates to normalized (0-1)
+                    ymin = max(0.0, min(1.0, ymin_raw / pil_image.height))
+                    xmin = max(0.0, min(1.0, xmin_raw / pil_image.width))
+                    ymax = max(0.0, min(1.0, ymax_raw / pil_image.height))
+                    xmax = max(0.0, min(1.0, xmax_raw / pil_image.width))
+                    print(f"   📐 Normalized: ymin={ymin:.4f}, xmin={xmin:.4f}, ymax={ymax:.4f}, xmax={xmax:.4f}")
 
                 # Ensure ymax >= ymin and xmax >= xmin after clamping
-                if ymax < ymin: ymax = ymin
-                if xmax < xmin: xmax = xmin
+                if ymax < ymin: 
+                    ymax = ymin
+                    print(f"   ⚠️  Fixed ymax < ymin")
+                if xmax < xmin: 
+                    xmax = xmin
+                    print(f"   ⚠️  Fixed xmax < xmin")
 
-                # Convert normalized (0-1) coordinates to SVG percentage
-                svg_x = xmin * 100
-                svg_y = ymin * 100
-                svg_width = (xmax - xmin) * 100
-                svg_height = (ymax - ymin) * 100
+                # Convert normalized (0-1) coordinates to absolute pixel coordinates
+                svg_x = xmin * pil_image.width
+                svg_y = ymin * pil_image.height
+                svg_width = (xmax - xmin) * pil_image.width
+                svg_height = (ymax - ymin) * pil_image.height
 
-                # Ensure width and height are non-negative
-                svg_width = max(0.0, svg_width)
-                svg_height = max(0.0, svg_height)
+                # Ensure width and height are non-negative and have minimum size
+                original_width = svg_width
+                original_height = svg_height
+                svg_width = max(4.0, svg_width)  # Minimum 4 pixels width
+                svg_height = max(4.0, svg_height)  # Minimum 4 pixels height
+                
+                if original_width < 4.0 or original_height < 4.0:
+                    print(f"   ⚠️  Enforced minimum size: width {original_width:.1f}px → {svg_width:.1f}px, height {original_height:.1f}px → {svg_height:.1f}px")
+                
+                print(f"   🎯 SVG coordinates: x={svg_x:.1f}px, y={svg_y:.1f}px, w={svg_width:.1f}px, h={svg_height:.1f}px")
+                
+                # Check if the box is too small or positioned incorrectly
+                if svg_width <= 4.0 and svg_height <= 4.0:
+                    print(f"   ⚠️  WARNING: Box is very small, may not be visible!")
+                    # Use a larger fallback box in the center of the image
+                    svg_x = pil_image.width * 0.25  # 25% from left
+                    svg_y = pil_image.height * 0.25  # 25% from top
+                    svg_width = pil_image.width * 0.5  # 50% width
+                    svg_height = pil_image.height * 0.5  # 50% height
+                    print(f"   🔧 Using fallback box: x={svg_x:.1f}px, y={svg_y:.1f}px, w={svg_width:.1f}px, h={svg_height:.1f}px")
+                
+                print(f"   ✅ Box {i+1} processed successfully")
 
-                svg_elements += f'<rect x="{svg_x}%" y="{svg_y}%" width="{svg_width}%" height="{svg_height}%" style="fill:blue;stroke:blue;stroke-width:1;fill-opacity:0.1;stroke-opacity:0.9" />'
-                svg_elements += f'<text x="{svg_x}%" y="{svg_y}%" dy="-5" fill="white" background="blue" font-size="12">{label}</text>'
+                # Make boxes much more visible with bright colors and thick stroke
+                svg_elements += f'<rect x="{svg_x}" y="{svg_y}" width="{svg_width}" height="{svg_height}" style="fill:lime;stroke:red;stroke-width:3;fill-opacity:0.3;stroke-opacity:1.0" />'
+                svg_elements += f'<text x="{svg_x}" y="{svg_y}" dy="-5" fill="white" stroke="black" stroke-width="1" font-size="14" font-weight="bold">{label}</text>'
             except (TypeError, ValueError, KeyError) as e:
-                # print(f"Skipping invalid 2D box item: {item}. Error: {e}")
+                print(f"   ❌ Error processing box {i+1}: {e}")
                 continue
         else:
-            pass # print(f"Skipping malformed item in 2D boxes_data: {item}")
+            print(f"   ❌ Skipping malformed item {i+1}: {item}")
+            pass
 
+    print("-" * 80)
+    print(f"🎨 Generated {len(svg_elements.split('<rect')) - 1} SVG rectangles")
+    print(f"📏 Total SVG elements length: {len(svg_elements)} characters")
+
+    # If no boxes were generated, add a test box to verify the function works
+    if not svg_elements:
+        print("⚠️  No boxes generated, adding test box")
+        test_x = pil_image.width * 0.1  # 10% from left
+        test_y = pil_image.height * 0.1  # 10% from top
+        test_width = pil_image.width * 0.2  # 20% width
+        test_height = pil_image.height * 0.2  # 20% height
+        svg_elements = f'<rect x="{test_x}" y="{test_y}" width="{test_width}" height="{test_height}" style="fill:yellow;stroke:blue;stroke-width:4;fill-opacity:0.5;stroke-opacity:1.0" />'
+        svg_elements += f'<text x="{test_x}" y="{test_y}" dy="-5" fill="black" stroke="white" stroke-width="1" font-size="16" font-weight="bold">TEST BOX</text>'
+
+    print("=" * 80)
+    print("🔍 END 2D BOUNDING BOX DEBUG LOG")
+    print("=" * 80)
+    print(f"📐 Final SVG viewBox: 0 0 {pil_image.width} {pil_image.height}")
+    print(f"🎯 Scaling approach: Absolute pixels → SVG viewBox → Responsive scaling")
+    print(f"✅ Each image will have its own coordinate system based on its dimensions")
+    print("=" * 80)
 
     html_content = f"""
     <div style="position: relative; display: inline-block;">
-        <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="Annotated 2D Image" style="max-width: 100%; height: auto;">
-        <svg width="100%" height="100%" style="position: absolute; top: 0; left: 0; pointer-events: none;">
+        <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="Annotated 2D Image" style="max-width: 100%; height: auto; display: block;">
+        <svg viewBox="0 0 {pil_image.width} {pil_image.height}" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 10; width: 100%; height: 100%;">
             {svg_elements}
         </svg>
     </div>
