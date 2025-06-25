@@ -33,8 +33,8 @@ def get_gemini_client():
         raise ConnectionError(f"Failed to initialize Gemini Client: {e}")
 
 # Default model IDs, can be overridden
-DEFAULT_MODEL_ID = "gemini-1.5-flash-latest" # Updated from "gemini-2.5-flash-lite-preview-06-17"
-PRO_MODEL_ID = "gemini-1.5-pro-latest" # Updated from "gemini-2.5-pro" as per common model IDs
+DEFAULT_MODEL_ID = "gemini-2.5-flash-lite-preview-06-17" # Updated from "gemini-2.5-flash-lite-preview-06-17"
+PRO_MODEL_ID = "gemini-2.5-pro" # Updated from "gemini-2.5-pro" as per common model IDs
 
 def generate_content_with_gemini(image_bytes, prompt_text, model_id=DEFAULT_MODEL_ID, generation_config_params=None):
     """

@@ -14,6 +14,7 @@ from utils.visualization_utils import (
     generate_point_html,
     generate_2d_box_html,
     generate_3d_box_html,
+    generate_segmentation_html,
     pil_to_base64
 )
 from app_config import (
@@ -84,7 +85,7 @@ def _process_single_image(image_bytes: bytes, full_prompt: str, analysis_type: s
     print("-" * 80)
 
     if model_output and not model_output.startswith("Error:") and not model_output.startswith("Content blocked"):
-        if analysis_type in ["Point to Items", "2D Bounding Boxes"]: # Types that expect simple JSON list output
+        if analysis_type in ["Point to Items", "2D Bounding Boxes", "Segmentation Masks"]: # Types that expect simple JSON list output
             print(f"🔍 Parsing JSON for {analysis_type}...")
             parsed_json = parse_gemini_json_output(model_output)
             if not parsed_json:
@@ -100,7 +101,7 @@ def _process_single_image(image_bytes: bytes, full_prompt: str, analysis_type: s
                 print("🔍 END IMAGE PROCESSING DEBUG LOG")
                 print("=" * 80)
                 return model_output, parsed_json, None
-        # For 3D Bounding Boxes, HTML generation handles parsing. For Classification/Segmentation, no direct JSON parsing needed here.
+        # For 3D Bounding Boxes, HTML generation handles parsing. For Classification, no direct JSON parsing needed here.
         print(f"✅ Model output received for {analysis_type} (no JSON parsing needed)")
         print("=" * 80)
         print("🔍 END IMAGE PROCESSING DEBUG LOG")
@@ -184,33 +185,39 @@ def display_analysis_results(results_data, analysis_type):
                 st.text_area("Raw Output", value=model_output_text, height=150, disabled=True, key=f"raw_output_{i}")
 
         elif analysis_type == "Segmentation Masks":
-            if pil_image:
-                st.image(pil_image, caption=f"Base image: {result['Image Name']}", width=300)
-            else:
-                st.caption(f"Cannot display image: {result['Image Name']}")
+            model_output_text = result.get('Output', '')
+            html_was_generated = bool(result.get("HtmlOutput"))
+            json_parse_error_indicated = "(Error parsing JSON)" in model_output_text
 
-            # Show user prompt
+            # Show user prompt and full prompt
             st.write(f"**User Prompt:**")
             st.markdown(f"> {result.get('Prompt', 'N/A')}")
-
-            # Show full prompt if enabled
             if result.get('Full Prompt') and os.environ.get("SHOW_FULL_PROMPT", "False").lower() == "true":
                 with st.expander("View Full Prompt (User + JSON Format)"):
                     st.text(result.get('Full Prompt', 'N/A'))
-            
-            model_output_segmentation = result.get('Output', 'N/A')
-            st.markdown(f"**Model's Output (Segmentation Data):**")
-            if model_output_segmentation.startswith("Error:") or model_output_segmentation.startswith("Content blocked") or model_output_segmentation.startswith("Segmentation mask analysis for"):
-                st.warning(model_output_segmentation)
-            else:
-                # Attempt to parse as JSON and pretty-print if successful
-                parsed_json_output = parse_gemini_json_output(model_output_segmentation)
-                if parsed_json_output:
-                    st.json(parsed_json_output)
+
+            if pil_image and html_was_generated:
+                st.components.v1.html(result["HtmlOutput"], height=pil_image.height + 100 if pil_image.height < 800 else 800, scrolling=True)
+            else: # Fallback if no HTML output or no image
+                if pil_image:
+                    st.image(pil_image, caption=f"Base image: {result['Image Name']}", width=300)
+
+                if json_parse_error_indicated and not model_output_text.startswith("Error:"):
+                    st.warning("Could not parse the model's output as valid JSON. Displaying raw output.")
+                    with st.expander("🔍 Debug: View Raw Model Output"):
+                        st.text(model_output_text)
+                elif model_output_text.startswith("Error:") or model_output_text.startswith("Content blocked"):
+                    st.error(f"Model Error: {model_output_text}")
                 else:
-                    # If not valid JSON, show as plain text in a code block
-                    st.markdown(f"```\n{model_output_segmentation}\n```")
-            st.info("Note: Visual rendering of segmentation masks is not yet implemented. Displaying raw model output.")
+                    # Show parsed JSON data for debugging
+                    with st.expander("🔍 Debug: View Parsed JSON Data"):
+                        if result.get("ParsedJSON"):
+                            st.json(result.get("ParsedJSON"))
+                        else:
+                            st.text("No parsed JSON data available")
+
+                st.markdown(f"**Model's Raw Output:**")
+                st.text_area("Raw Output", value=model_output_text, height=150, disabled=True, key=f"raw_output_{i}")
 
         # Display raw output for debugging or if HTML failed - this section might be redundant for segmentation now
         # if analysis_type not in ["Image Classification", "Segmentation Masks"] and not result.get("HtmlOutput"):
@@ -420,16 +427,9 @@ if analyze_button:
                                 current_result_data["HtmlOutput"] = generate_2d_box_html(pil_img_for_html, parsed_json_data, image_id=f"img_{i}")
                             elif selected_analysis_type == "3D Bounding Boxes": # generate_3d_box_html takes raw model output
                                 current_result_data["HtmlOutput"] = generate_3d_box_html(pil_img_for_html, model_output_raw, image_id=f"img_{i}")
-                            # Image Classification and Segmentation Masks do not generate HTML overlays here by default
-
-                        elif selected_analysis_type == "Segmentation Masks" and not model_output_raw.startswith("Error:"):
-                            # Special handling for segmentation if we want to update its status
-                            # For now, _process_single_image already sets current_result_data["Output"]
-                            # If it's the placeholder, it's fine. If it's actual model output, also fine.
-                            # The placeholder `f"Segmentation mask analysis for '{image_name}'..."` is now part of the json_spec.
-                            # Actual model call will occur.
-                            pass
-
+                            elif selected_analysis_type == "Segmentation Masks" and parsed_json_data:
+                                current_result_data["HtmlOutput"] = generate_segmentation_html(pil_img_for_html, parsed_json_data, image_id=f"img_{i}")
+                            # Image Classification does not generate HTML overlays here by default
 
                         results_data.append(current_result_data)
                         image_files_processed_paths.append(image_path)

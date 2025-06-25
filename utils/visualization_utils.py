@@ -6,6 +6,19 @@ from io import BytesIO
 from PIL import Image
 import re
 
+# Segmentation colors for different mask instances (matching sample app)
+SEGMENTATION_COLORS = [
+    '#E6194B', '#3C89D0', '#3CB44B', '#FFE119', '#911EB4',
+    '#42D4F4', '#F58231', '#F032E6', '#BFEF45', '#469990'
+]
+
+def hex_to_rgb(hex_color):
+    """Convert hex color to RGB tuple."""
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+SEGMENTATION_COLORS_RGB = [hex_to_rgb(color) for color in SEGMENTATION_COLORS]
+
 def parse_gemini_json_output(json_output_str: str) -> dict | list | None:
     """
     Parses JSON output from Gemini, which may be wrapped in markdown code blocks.
@@ -596,5 +609,140 @@ def generate_3d_box_html(pil_image: Image.Image, boxes_json_str: str, image_id: 
         </div>
     </div>
     <p><small>Note: Displaying a simplified 2D projection of the 3D boxes. Full interactive 3D visualization is more complex. Assumes x_center, y_center, x_size, y_size from 'box_3d' are normalized [0-1] for 2D projection.</small></p>
+    """
+    return html_content
+
+
+def generate_segmentation_html(pil_image: Image.Image, segmentation_data: list, image_id: str = "imageToAnnotateSegmentation") -> str:
+    """
+    Generates HTML to display an image with segmentation masks overlaid using HTML5 Canvas.
+    Each mask is stretched to fit its bounding box, matching the sample app's approach.
+    
+    Args:
+        pil_image: The base image
+        segmentation_data: List of segmentation objects with box_2d, mask, and label
+        image_id: Unique ID for the image element
+    
+    Returns:
+        HTML string with the image and overlaid segmentation masks
+    """
+    img_base64 = pil_to_base64(pil_image)
+    width = pil_image.width
+    height = pil_image.height
+    
+    # Generate canvas elements for each segmentation mask
+    canvas_elements = ""
+    mask_details = []
+    
+    for i, item in enumerate(segmentation_data):
+        if isinstance(item, dict) and "box_2d" in item and "mask" in item and "label" in item:
+            try:
+                # Extract bounding box coordinates (normalized to 0-1000)
+                box_2d = item["box_2d"]
+                mask_data = item["mask"]
+                label = item["label"]
+                
+                if len(box_2d) == 4:
+                    ymin, xmin, ymax, xmax = box_2d
+                    # Convert to pixel coordinates
+                    x_px = int((xmin / 1000) * width)
+                    y_px = int((ymin / 1000) * height)
+                    w_px = max(1, int(((xmax - xmin) / 1000) * width))
+                    h_px = max(1, int(((ymax - ymin) / 1000) * height))
+                    
+                    # Get color for this mask (same as sample app)
+                    color_rgb = SEGMENTATION_COLORS_RGB[i % len(SEGMENTATION_COLORS_RGB)]
+                    color_hex = SEGMENTATION_COLORS[i % len(SEGMENTATION_COLORS)]
+                    
+                    # Create canvas element for this mask
+                    canvas_id = f"mask_canvas_{image_id}_{i}"
+                    canvas_elements += f"""
+                    <div style="position: absolute; 
+                               top: {y_px}px; 
+                               left: {x_px}px; 
+                               width: {w_px}px; 
+                               height: {h_px}px; 
+                               pointer-events: none; 
+                               z-index: {10 + i};">
+                        <canvas id="{canvas_id}" 
+                                width="{w_px}" height="{h_px}"
+                                style="width: 100%; height: 100%; opacity: 0.5; display: block;">
+                        </canvas>
+                        <div style="position: absolute; 
+                                   top: 0; 
+                                   left: 0; 
+                                   background: {color_hex}; 
+                                   color: white; 
+                                   padding: 2px 6px; 
+                                   font-size: 12px; 
+                                   font-weight: bold; 
+                                   border-radius: 3px; 
+                                   z-index: {20 + i};">
+                            {label}
+                        </div>
+                    </div>
+                    """
+                    
+                    mask_details.append(f"<li><b>{label}</b>: Box({xmin:.0f}, {ymin:.0f}, {xmax:.0f}, {ymax:.0f})</li>")
+                    
+                    # Add JavaScript to process the mask (similar to sample app's BoxMask)
+                    # Clean up mask data - remove data URL prefix if present
+                    clean_mask_data = mask_data
+                    if mask_data.startswith('data:image/png;base64,'):
+                        clean_mask_data = mask_data[22:]  # Remove prefix
+                    elif mask_data.startswith('data:image/'):
+                        # Find the base64 part
+                        base64_start = mask_data.find('base64,')
+                        if base64_start != -1:
+                            clean_mask_data = mask_data[base64_start + 7:]
+                    
+                    canvas_elements += f"""
+                    <script>
+                    (function() {{
+                        const canvas = document.getElementById('{canvas_id}');
+                        const ctx = canvas.getContext('2d');
+                        const maskData = '{clean_mask_data}';
+                        if (canvas && ctx && maskData) {{
+                            const img = new window.Image();
+                            img.onload = function() {{
+                                // Stretch the mask to fill the canvas (bounding box)
+                                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                                ctx.imageSmoothingEnabled = false;
+                                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                                const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                                const data = pixels.data;
+                                for (let i = 0; i < data.length; i += 4) {{
+                                    // Use alpha from mask (like sample app)
+                                    data[i + 3] = data[i];
+                                    // Set color from palette (like sample app)
+                                    data[i] = {color_rgb[0]};
+                                    data[i + 1] = {color_rgb[1]};
+                                    data[i + 2] = {color_rgb[2]};
+                                }}
+                                ctx.putImageData(pixels, 0, 0);
+                            }};
+                            img.onerror = function() {{
+                                ctx.fillStyle = '{color_hex}';
+                                ctx.globalAlpha = 0.3;
+                                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                            }};
+                            img.src = 'data:image/png;base64,' + maskData;
+                        }}
+                    }})();
+                    </script>
+                    """
+            except (TypeError, ValueError, KeyError) as e:
+                mask_details.append(f"<li>Error processing mask {i}: {e}</li>")
+                continue
+        else:
+            mask_details.append(f"<li>Invalid mask data format for item {i}</li>")
+    
+    mask_details_html = "<ul>" + "".join(mask_details) + "</ul>" if mask_details else "<p>No valid segmentation data to display.</p>"
+    
+    html_content = f"""
+    <div style="position: relative; display: inline-block; width: {width}px; height: {height}px;">
+        <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="Segmentation Image" style="width: 100%; height: 100%; display: block;">
+        {canvas_elements}
+    </div>
     """
     return html_content
