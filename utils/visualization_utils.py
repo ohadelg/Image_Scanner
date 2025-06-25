@@ -316,23 +316,25 @@ def generate_point_html(pil_image: Image.Image, points_data: list, image_id: str
 
 def generate_2d_box_html(pil_image: Image.Image, boxes_data: list, image_id: str = "imageToAnnotate2D") -> str:
     """
-    Generates an HTML string to display an image with 2D bounding boxes overlaid.
+    Generates HTML to display an image with 2D bounding boxes overlaid.
+    Matches the sample app's approach: coordinates normalized to 0-1000, positioned using percentages.
+    
     Args:
         pil_image: The PIL Image object.
-        boxes_data: A list of dictionaries, where each dict has "box_2d": [ymin, xmin, ymax, xmax] 
-                     (can be normalized 0-1 or absolute pixel coordinates)
-                     and "label": "description".
-        image_id: A unique ID for the image element in HTML.
+        boxes_data: A list of dictionaries, where each dict has "box_2d": [ymin, xmin, ymax, xmax] (normalized to 0-1000)
+                   and "label": "description".
+        image_id: A unique ID for the image element in HTML, if multiple images are on a page.
+    
     Returns:
         An HTML string for rendering.
     """
     img_base64 = pil_to_base64(pil_image)
-    svg_elements = ""
-
+    
+    # Ensure boxes_data is a list of dicts as expected
     if not isinstance(boxes_data, list):
-        boxes_data = []
-
-    # Comprehensive debug logging
+        boxes_data = [] # Default to empty if format is incorrect
+    
+    # Debug logging
     print("=" * 80)
     print("🔍 2D BOUNDING BOX DEBUG LOG")
     print("=" * 80)
@@ -344,134 +346,75 @@ def generate_2d_box_html(pil_image: Image.Image, boxes_data: list, image_id: str
     print(f"📋 Raw boxes data: {boxes_data}")
     print("-" * 80)
     
+    box_elements = ""
+    box_details = []
+    
     for i, item in enumerate(boxes_data):
         if isinstance(item, dict) and "box_2d" in item and "label" in item:
             try:
-                ymin_raw, xmin_raw, ymax_raw, xmax_raw = item["box_2d"]
+                # Extract coordinates (normalized to 0-1000 like sample app)
+                box_2d = item["box_2d"]
                 label = item["label"]
                 
-                print(f"📦 Box {i+1}: '{label}'")
-                print(f"   📊 Raw coordinates: ymin={ymin_raw}, xmin={xmin_raw}, ymax={ymax_raw}, xmax={xmax_raw}")
-
-                # Determine if coordinates are normalized (0-1) or absolute pixels
-                # If any coordinate is > 1, assume they are absolute pixel coordinates
-                is_normalized = all(coord <= 1.0 for coord in [ymin_raw, xmin_raw, ymax_raw, xmax_raw])
-                
-                if is_normalized:
-                    print(f"   🔄 Using normalized coordinates (0-1)")
-                    # Clamp normalized coordinates to the [0, 1] range
-                    ymin = max(0.0, min(1.0, ymin_raw))
-                    xmin = max(0.0, min(1.0, xmin_raw))
-                    ymax = max(0.0, min(1.0, ymax_raw))
-                    xmax = max(0.0, min(1.0, xmax_raw))
-                else:
-                    print(f"   🔄 Converting absolute pixel coordinates to normalized")
-                    print(f"   📏 Image bounds: width={pil_image.width}, height={pil_image.height}")
+                if len(box_2d) == 4:
+                    ymin, xmin, ymax, xmax = box_2d
                     
-                    # Check if coordinates are within image bounds
-                    if (xmin_raw >= pil_image.width or xmax_raw >= pil_image.width or 
-                        ymin_raw >= pil_image.height or ymax_raw >= pil_image.height):
-                        print(f"   ⚠️  WARNING: Coordinates outside image bounds!")
-                        print(f"   📏 Image: {pil_image.width}x{pil_image.height}, Coords: xmin={xmin_raw}, xmax={xmax_raw}, ymin={ymin_raw}, ymax={ymax_raw}")
-                        
-                        # Try to scale coordinates to fit within image bounds
-                        # Find the maximum scale factor needed
-                        scale_x = min(1.0, (pil_image.width - 1) / max(xmax_raw, 1))
-                        scale_y = min(1.0, (pil_image.height - 1) / max(ymax_raw, 1))
-                        scale_factor = min(scale_x, scale_y)
-                        
-                        print(f"   🔧 Scaling coordinates by factor: {scale_factor:.4f}")
-                        
-                        # Scale the coordinates
-                        xmin_raw = xmin_raw * scale_factor
-                        xmax_raw = xmax_raw * scale_factor
-                        ymin_raw = ymin_raw * scale_factor
-                        ymax_raw = ymax_raw * scale_factor
-                        
-                        print(f"   📐 Scaled coordinates: xmin={xmin_raw:.1f}, xmax={xmax_raw:.1f}, ymin={ymin_raw:.1f}, ymax={ymax_raw:.1f}")
+                    print(f"📦 Box {i+1}: '{label}'")
+                    print(f"   📊 Raw coordinates: ymin={ymin}, xmin={xmin}, ymax={ymax}, xmax={xmax}")
                     
-                    # Convert absolute pixel coordinates to normalized (0-1)
-                    ymin = max(0.0, min(1.0, ymin_raw / pil_image.height))
-                    xmin = max(0.0, min(1.0, xmin_raw / pil_image.width))
-                    ymax = max(0.0, min(1.0, ymax_raw / pil_image.height))
-                    xmax = max(0.0, min(1.0, xmax_raw / pil_image.width))
-                    print(f"   📐 Normalized: ymin={ymin:.4f}, xmin={xmin:.4f}, ymax={ymax:.4f}, xmax={xmax:.4f}")
-
-                # Ensure ymax >= ymin and xmax >= xmin after clamping
-                if ymax < ymin: 
-                    ymax = ymin
-                    print(f"   ⚠️  Fixed ymax < ymin")
-                if xmax < xmin: 
-                    xmax = xmin
-                    print(f"   ⚠️  Fixed xmax < xmin")
-
-                # Convert normalized (0-1) coordinates to absolute pixel coordinates
-                svg_x = xmin * pil_image.width
-                svg_y = ymin * pil_image.height
-                svg_width = (xmax - xmin) * pil_image.width
-                svg_height = (ymax - ymin) * pil_image.height
-
-                # Ensure width and height are non-negative and have minimum size
-                original_width = svg_width
-                original_height = svg_height
-                svg_width = max(4.0, svg_width)  # Minimum 4 pixels width
-                svg_height = max(4.0, svg_height)  # Minimum 4 pixels height
-                
-                if original_width < 4.0 or original_height < 4.0:
-                    print(f"   ⚠️  Enforced minimum size: width {original_width:.1f}px → {svg_width:.1f}px, height {original_height:.1f}px → {svg_height:.1f}px")
-                
-                print(f"   🎯 SVG coordinates: x={svg_x:.1f}px, y={svg_y:.1f}px, w={svg_width:.1f}px, h={svg_height:.1f}px")
-                
-                # Check if the box is too small or positioned incorrectly
-                if svg_width <= 4.0 and svg_height <= 4.0:
-                    print(f"   ⚠️  WARNING: Box is very small, may not be visible!")
-                    # Use a larger fallback box in the center of the image
-                    svg_x = pil_image.width * 0.25  # 25% from left
-                    svg_y = pil_image.height * 0.25  # 25% from top
-                    svg_width = pil_image.width * 0.5  # 50% width
-                    svg_height = pil_image.height * 0.5  # 50% height
-                    print(f"   🔧 Using fallback box: x={svg_x:.1f}px, y={svg_y:.1f}px, w={svg_width:.1f}px, h={svg_height:.1f}px")
-                
-                print(f"   ✅ Box {i+1} processed successfully")
-
-                # Make boxes much more visible with bright colors and thick stroke
-                svg_elements += f'<rect x="{svg_x}" y="{svg_y}" width="{svg_width}" height="{svg_height}" style="fill:lime;stroke:red;stroke-width:3;fill-opacity:0.3;stroke-opacity:1.0" />'
-                svg_elements += f'<text x="{svg_x}" y="{svg_y}" dy="-5" fill="white" stroke="black" stroke-width="1" font-size="14" font-weight="bold">{label}</text>'
+                    # Convert from normalized 0-1000 to percentages (like sample app)
+                    x_percent = (xmin / 1000) * 100
+                    y_percent = (ymin / 1000) * 100
+                    width_percent = ((xmax - xmin) / 1000) * 100
+                    height_percent = ((ymax - ymin) / 1000) * 100
+                    
+                    print(f"   📐 Percentages: x={x_percent:.1f}%, y={y_percent:.1f}%, w={width_percent:.1f}%, h={height_percent:.1f}%")
+                    print(f"   ✅ Box {i+1} processed successfully")
+                    
+                    # Create box element (like sample app)
+                    box_elements += f"""
+                    <div style="position: absolute; 
+                               top: {y_percent}%; 
+                               left: {x_percent}%; 
+                               width: {width_percent}%; 
+                               height: {height_percent}%; 
+                               border: 2px solid #3B68FF; 
+                               pointer-events: none; 
+                               z-index: {10 + i};">
+                        <div style="position: absolute; 
+                                   top: 0; 
+                                   left: 0; 
+                                   background: #3B68FF; 
+                                   color: white; 
+                                   padding: 2px 6px; 
+                                   font-size: 12px; 
+                                   font-weight: bold;">
+                            {label}
+                        </div>
+                    </div>
+                    """
+                    
+                    box_details.append(f"<li><b>{label}</b>: Box({xmin:.0f}, {ymin:.0f}, {xmax:.0f}, {ymax:.0f})</li>")
+                    
             except (TypeError, ValueError, KeyError) as e:
                 print(f"   ❌ Error processing box {i+1}: {e}")
+                box_details.append(f"<li>Error processing box {i+1}: {e}</li>")
                 continue
         else:
             print(f"   ❌ Skipping malformed item {i+1}: {item}")
-            pass
-
+            box_details.append(f"<li>Invalid box data format for item {i+1}</li>")
+    
     print("-" * 80)
-    print(f"🎨 Generated {len(svg_elements.split('<rect')) - 1} SVG rectangles")
-    print(f"📏 Total SVG elements length: {len(svg_elements)} characters")
-
-    # If no boxes were generated, add a test box to verify the function works
-    if not svg_elements:
-        print("⚠️  No boxes generated, adding test box")
-        test_x = pil_image.width * 0.1  # 10% from left
-        test_y = pil_image.height * 0.1  # 10% from top
-        test_width = pil_image.width * 0.2  # 20% width
-        test_height = pil_image.height * 0.2  # 20% height
-        svg_elements = f'<rect x="{test_x}" y="{test_y}" width="{test_width}" height="{test_height}" style="fill:yellow;stroke:blue;stroke-width:4;fill-opacity:0.5;stroke-opacity:1.0" />'
-        svg_elements += f'<text x="{test_x}" y="{test_y}" dy="-5" fill="black" stroke="white" stroke-width="1" font-size="16" font-weight="bold">TEST BOX</text>'
-
+    print(f"🎨 Generated {len(box_elements.split('position: absolute')) - 1} box elements")
+    print(f"📏 Total box elements length: {len(box_elements)} characters")
     print("=" * 80)
     print("🔍 END 2D BOUNDING BOX DEBUG LOG")
     print("=" * 80)
-    print(f"📐 Final SVG viewBox: 0 0 {pil_image.width} {pil_image.height}")
-    print(f"🎯 Scaling approach: Absolute pixels → SVG viewBox → Responsive scaling")
-    print(f"✅ Each image will have its own coordinate system based on its dimensions")
-    print("=" * 80)
-
+    
     html_content = f"""
     <div style="position: relative; display: inline-block;">
-        <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="Annotated 2D Image" style="max-width: 100%; height: auto; display: block;">
-        <svg viewBox="0 0 {pil_image.width} {pil_image.height}" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 10; width: 100%; height: 100%;">
-            {svg_elements}
-        </svg>
+        <img id="{image_id}" src="data:image/png;base64,{img_base64}" alt="2D Bounding Box Image" style="max-width: 100%; height: auto; display: block;">
+        {box_elements}
     </div>
     """
     return html_content
