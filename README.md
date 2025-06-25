@@ -95,7 +95,7 @@ Follow these steps to set up and run the project locally:
 
 ## Important Notes
 
-*   **API Key Security:** Your Gemini API key is sensitive. Keep it private. The `.env` file method is for local development. For deployment (e.g., to Streamlit Community Cloud), use their secrets management features.
+*   **API Key Security:** Your Gemini API key is sensitive. Keep it private. The `.env` file method is for local development. For deployment (e.g., to Streamlit f Community Cloud), use their secrets management features.
 *   **Rate Limits:** Be mindful of Gemini API rate limits, especially when processing a large number of images.
 *   **Error Handling:** The application includes basic error handling. If you encounter issues, check the error messages and your API key setup.
 *   **ZIP File Structure:** The application expects a flat structure of images within the ZIP file or images in subfolders. It will recursively find all supported image types.
